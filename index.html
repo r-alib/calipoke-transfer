@@ -208,6 +208,10 @@ td.num,th.num{text-align:right; font-family:var(--mono)}
 .reqrow .rmeta{font-size:12.5px; color:var(--muted); margin-top:3px}
 .reqrow .ritems{font-size:13px; color:var(--ink); margin-top:6px}
 .reqlist{display:flex; flex-direction:column; gap:10px; margin-top:14px}
+.rowwrap{display:flex; gap:8px; align-items:stretch}
+.rowwrap .reqrow{flex:1; min-width:0}
+.rowdel{flex:0 0 auto; width:46px; border-radius:var(--r); border:1px solid var(--border); background:var(--panel); color:var(--muted); font-size:16px; cursor:pointer; transition:.12s}
+.rowdel:hover{border-color:var(--err); color:var(--err); background:rgba(240,82,77,.08)}
 .logrow{display:flex; gap:10px; padding:9px 0; border-bottom:1px solid var(--border); font-size:13.5px}
 .logrow .lt{font-family:var(--mono); font-size:12px; color:var(--faint); white-space:nowrap}
 .logrow .lb{font-weight:600; color:var(--info)}
@@ -399,7 +403,7 @@ const ROLES = {
 };
 const ELEVATED_PIN = '0515';                      // asked from admin / celina / andre
 const LOGO_URL = "https://i.postimg.cc/VkfXDqWf/images.jpg";
-const BUILD = '2026-10-20a';
+const BUILD = '2026-10-20b';
 const INV_CACHE_MS = 20*60*1000;
 const STATION_PATH = 'packstation';
 /* ============================================================ */
@@ -649,12 +653,16 @@ function openPicker(done){
 let pickerDecode=null;
 
 /* ---------- list ---------- */
-let rqTab='mine', rqSt='';
-function enterReqs(){ show('reqs'); if(rqTab==='review' && !canReview()) rqTab='mine'; if(rqTab==='prepare' && !canPrepare()) rqTab='mine'; renderReqs(); }
+let rqTab='', rqSt='';
+/* elevated roles land on "Active" — everything that needs their attention right now */
+function enterReqs(){ show('reqs'); if(!rqTab) rqTab = canPrepare() ? 'active' : 'mine'; if(rqTab==='review' && !canReview()) rqTab='mine'; if((rqTab==='prepare'||rqTab==='active') && !canPrepare()) rqTab='mine'; renderReqs(); }
 function allT(){ return Object.values(TR).sort((a,b)=>(b.updatedAt||b.createdAt||0)-(a.updatedAt||a.createdAt||0)); }
-function reqsForTab(tab){ const all=allT(); if(tab==='mine') return all.filter(isMine); if(tab==='review') return all.filter(t=>t.status==='pending'); if(tab==='prepare') return all.filter(t=>t.status==='approved'); return all; }
+function isActiveFor(t){ if(t.status==='pending' && canReview()) return true; if(t.status==='approved' && canPrepare()) return true; return isMine(t) && ['draft','pending','approved','ready'].includes(t.status); }
+function reqsForTab(tab){ const all=allT(); if(tab==='mine') return all.filter(isMine); if(tab==='active') return all.filter(isActiveFor); if(tab==='review') return all.filter(t=>t.status==='pending'); if(tab==='prepare') return all.filter(t=>t.status==='approved'); return all; }
 function renderReqs(){
-  const tabs=[['mine','My requests',reqsForTab('mine').filter(t=>['draft','pending','approved'].includes(t.status)).length]];
+  const tabs=[];
+  if(canPrepare()) tabs.push(['active','Active',reqsForTab('active').length]);
+  tabs.push(['mine','My requests',reqsForTab('mine').filter(t=>['draft','pending','approved'].includes(t.status)).length]);
   if(canReview()) tabs.push(['review','To review',reqsForTab('review').length]);
   if(canPrepare()) tabs.push(['prepare','To prepare',reqsForTab('prepare').length]);
   tabs.push(['all','All',allT().length]);
@@ -665,12 +673,17 @@ function renderReqs(){
   $$('#rqStatus [data-s]').forEach(b=>b.onclick=()=>{ rqSt=rqSt===b.dataset.s?'':b.dataset.s; renderReqs(); });
   let list=reqsForTab(rqTab); if(rqSt) list=list.filter(t=>t.status===rqSt);
   const body=$('#rqBody');
-  if(!list.length){ body.innerHTML='<div class="empty">Nothing here.'+(rqTab==='mine'?'<br><span style="font-size:13px">Tap ＋ New request to start one.</span>':'')+'</div>'; return; }
+  const adm=MY_ROLE==='admin';
+  if(!list.length){ body.innerHTML='<div class="empty">'+(rqTab==='active'?'Nothing needs your attention right now.':'Nothing here.')+(rqTab==='mine'?'<br><span style="font-size:13px">Tap ＋ New request to start one.</span>':'')+'</div>'; return; }
   body.innerHTML='<div class="reqlist">'+list.map(t=>{ const units=t.items.reduce((n,i)=>n+(+i.qty||0),0);
-    return '<button class="reqrow" data-id="'+esc(t.id)+'"><div><div class="rid">'+esc(t.id)+' <span class="sub" style="font-weight:500;font-size:13px">· '+esc(t.requester)+'</span></div>'+
+    const row='<button class="reqrow" data-id="'+esc(t.id)+'"><div><div class="rid">'+esc(t.id)+' <span class="sub" style="font-weight:500;font-size:13px">· '+esc(t.requester)+'</span></div>'+
       '<div class="rmeta">'+esc(fmtTime(t.createdAt))+' · '+t.items.length+' line(s) · '+units+' units'+(t.note?' · “'+esc(t.note.slice(0,80))+(t.note.length>80?'…':'')+'”':'')+'</div>'+
-      '<div class="ritems">'+esc(t.items.slice(0,4).map(i=>i.name+' ×'+i.qty).join(', '))+(t.items.length>4?' …':'')+'</div></div>'+stag(t.status)+'</button>'; }).join('')+'</div>';
+      '<div class="ritems">'+esc(t.items.slice(0,4).map(i=>i.name+' ×'+i.qty).join(', '))+(t.items.length>4?' …':'')+'</div></div>'+stag(t.status)+'</button>';
+    return adm ? '<div class="rowwrap">'+row+'<button class="rowdel" data-del="'+esc(t.id)+'" title="Delete this request">✕</button></div>' : row; }).join('')+'</div>'+
+    (adm && list.length>1 ? '<div class="srcrow" style="margin-top:12px;justify-content:flex-end"><button class="btn danger ghost sm" id="rqDelAll">🗑 Delete all '+list.length+' shown</button></div>' : '');
   $$('#rqBody [data-id]').forEach(b=>b.onclick=()=>openReq(b.dataset.id));
+  $$('#rqBody [data-del]').forEach(b=>b.onclick=async e=>{ e.stopPropagation(); const id=b.dataset.del; if(!confirm('Delete '+id+' permanently?')) return; await root.child('transfers/'+id).remove(); toast(id+' deleted','ok'); });
+  const da=$('#rqDelAll'); if(da) da.onclick=async()=>{ if(!confirm('Delete all '+list.length+' request(s) currently shown? This cannot be undone.')) return; if(!confirm('Are you sure?')) return; const up={}; list.forEach(t=>up['transfers/'+t.id]=null); await root.update(up); toast(list.length+' request(s) deleted','ok'); };
 }
 $('#rqBack').onclick=goMenu;
 $('#rqNew').onclick=()=>enterNew();
@@ -766,7 +779,7 @@ function renderReq(){
   if(st==='pending' && mine) acts+='<button class="btn danger ghost" id="aCancel">Cancel request</button>';
   if(st==='pending' && rev) acts+='<button class="btn danger" id="aReject">✕ Reject</button><button class="btn primary lg" id="aApprove">✓ Approve transfer</button>';
   if(st==='approved' && prep) acts+='<button class="btn primary lg" id="aReady">📦 Mark as ready</button>';
-  if(MY_ROLE==='admin' && !['draft'].includes(st)) acts+='<button class="btn danger ghost" id="aDelete">Delete</button>';
+  if(MY_ROLE==='admin' && !(st==='draft'&&mine)) acts+='<button class="btn danger ghost" id="aDelete">Delete</button>';
   if(acts) h+='<div class="card" style="margin-top:14px"><div class="srcrow" style="justify-content:flex-end">'+acts+'</div>'+
     (editApp?'<p class="sub" style="font-size:12.5px;margin-top:10px">Adjust the <b>Approved</b> column, add or remove lines, then approve. The preparers get the approved quantities.</p>':'')+
     (editPrep?'<p class="sub" style="font-size:12.5px;margin-top:10px">If something is short, lower the <b>Prepared</b> quantity before marking the request ready.</p>':'')+'</div>';
