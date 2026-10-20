@@ -77,7 +77,7 @@ textarea.tinput{font-family:var(--body); min-height:84px; resize:vertical; width
 .menuhead{display:flex; flex-direction:column; align-items:center; text-align:center; padding:6px 0 24px}
 .menutitle{font-family:var(--disp); font-weight:700; font-size:32px; letter-spacing:.03em; margin:14px 0 5px}
 .menusub{color:var(--muted); font-size:12px; letter-spacing:.1em; text-transform:uppercase; margin:0}
-.modegrid{display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:14px}
+.modegrid{display:grid; grid-template-columns:1fr; gap:12px; max-width:640px; margin:0 auto}
 .modetile{display:grid; grid-template-columns:auto 1fr auto; gap:16px; align-items:center; text-align:left; position:relative; background:var(--panel); border:1px solid var(--border); border-radius:var(--r); padding:17px 18px; color:var(--ink); transition:.15s}
 .modetile:hover{border-color:var(--accent); background:#11201a; transform:translateY(-2px)}
 .modetile .micon{width:54px; height:54px; border-radius:15px; background:var(--panel2); border:1px solid var(--border); display:grid; place-items:center; font-size:27px; flex:none}
@@ -403,7 +403,7 @@ const ROLES = {
 };
 const ELEVATED_PIN = '0515';                      // asked from admin / celina / andre
 const LOGO_URL = "https://i.postimg.cc/VkfXDqWf/images.jpg";
-const BUILD = '2026-10-20b';
+const BUILD = '2026-10-20c';
 const INV_CACHE_MS = 20*60*1000;
 const STATION_PATH = 'packstation';
 /* ============================================================ */
@@ -884,9 +884,9 @@ function renderMenu(){
   if(c.mine) b+='<span class="badge muted">'+c.mine+' of mine in progress</span>';
   if(c.ready) b+='<span class="badge ok">'+c.ready+' ready for you</span>';
   const tiles=[
+    {icon:'🚚',name:'TRANSFER REQUESTS',desc:'Request products and follow the transfer',go:enterReqs,badges:b},
     {icon:'📖',name:'STOCK',desc:'Look up any product — photo, quantity, barcode',go:enterStock},
-    {icon:'📥',name:'RECEIVINGS',desc:'What arrived, when and from whom',go:enterRecv},
-    {icon:'🚚',name:'TRANSFER REQUESTS',desc:'Request products and follow the transfer',go:enterReqs,badges:b}];
+    {icon:'📥',name:'RECEIVINGS',desc:'What arrived, when and from whom',go:enterRecv}];
   $('#modeGrid').innerHTML=tiles.map((m,i)=>'<button class="modetile" data-m="'+i+'"><div class="micon">'+m.icon+'</div><div><div class="mname">'+m.name+'</div><div class="mdesc">'+m.desc+'</div>'+(m.badges?'<div class="mbadges">'+m.badges+'</div>':'')+'</div><div class="mgo">→</div></button>').join('');
   $$('#modeGrid [data-m]').forEach(b=>b.onclick=()=>tiles[+b.dataset.m].go());
 }
