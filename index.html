@@ -222,6 +222,11 @@ td.num,th.num{text-align:right; font-family:var(--mono)}
 .qtycell input{width:72px; text-align:center; background:var(--bg); border:1.5px solid var(--line); border-radius:9px; color:var(--ink); font-family:var(--mono); font-weight:700; font-size:16px; padding:7px 4px; outline:none}
 .qtycell input:focus{border-color:var(--accent)}
 .qtycell input.diff{border-color:var(--warn); color:var(--warn)}
+.locsel{background:var(--bg); border:1.5px solid var(--line); border-radius:11px; color:var(--ink); font-family:var(--body); font-size:14px; padding:11px 12px; outline:none; min-width:170px}
+.locsel:focus{border-color:var(--accent)} .locsel.missing{border-color:var(--warn)} .locsel.sm{padding:7px 8px; font-size:13px; min-width:140px}
+.locrow{display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:14px 16px 0}
+.locrow .lbl{font-family:var(--disp); font-weight:700; font-size:14px; letter-spacing:.02em}
+.locrow .hint{color:var(--muted); font-size:12.5px}
 .recvsess{background:var(--panel); border:1px solid var(--border); border-radius:var(--r); padding:14px 16px; margin-top:10px}
 .recvsess .rh{display:flex; align-items:center; gap:10px; flex-wrap:wrap; cursor:pointer}
 .recvsess .rsup{font-family:var(--disp); font-weight:700; font-size:17px}
@@ -334,6 +339,7 @@ td.num,th.num{text-align:right; font-family:var(--mono)}
       <div class="pill">Lines <b id="nwCount">0</b> · units <b id="nwUnits">0</b></div>
     </div>
     <div class="scanwrap">
+      <div class="locrow"><span class="lbl">📍 Deliver to</span><select id="nwTo" class="locsel"></select><span class="hint">where the products should arrive</span></div>
       <div class="scanhead"><span class="mode items">Add products</span><span class="who">name · barcode · camera</span></div>
       <div class="scanrow">
         <input id="nwQ" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type a name or scan a barcode…">
@@ -406,7 +412,7 @@ const ROLES = {
 };
 const ELEVATED_PIN = '0515';                      // asked from admin / celina / andre
 const LOGO_URL = "https://i.postimg.cc/VkfXDqWf/images.jpg";
-const BUILD = '2026-10-22a';
+const BUILD = '2026-10-30a';
 const INV_CACHE_MS = 20*60*1000;
 const STATION_PATH = 'packstation';
 /* ============================================================ */
@@ -620,6 +626,9 @@ $('#rvCsv').onclick=()=>{ const rows=[['Date','Supplier','Status','Item','Variat
 /* ============================================================
    TRANSFER REQUESTS
    ============================================================ */
+const LOCATIONS=['Warehouse','Stockroom','Tiktok 1','Ebay','What Not','Single & Slab'];
+function locOptions(sel, blank){ return (blank?'<option value="">'+blank+'</option>':'')+LOCATIONS.map(l=>'<option value="'+esc(l)+'"'+(l===sel?' selected':'')+'>'+esc(l)+'</option>').join(''); }
+function fromSummary(items){ const f=[...new Set(items.map(i=>i.from||''))]; return f.length===1?f[0]:'mixed'; }
 let cart=[], cartDraftId=null;    // items being composed; draft id when editing a saved draft
 const newId=()=>{ const d=new Date(); return 'TR-'+String(d.getFullYear()).slice(2)+pad2(d.getMonth()+1)+pad2(d.getDate())+'-'+Math.random().toString(36).slice(2,6).toUpperCase(); };
 function normT(raw,id){ if(!raw) return null; const t=Object.assign({id}, raw); t.items=arr(raw.items).map(i=>Object.assign({qty:0}, i)); t.log=arr(raw.log); t.status=t.status||'draft'; return t; }
@@ -679,7 +688,7 @@ function renderReqs(){
   const adm=MY_ROLE==='admin';
   if(!list.length){ body.innerHTML='<div class="empty">'+(rqTab==='active'?'Nothing needs your attention right now.':'Nothing here.')+(rqTab==='mine'?'<br><span style="font-size:13px">Tap ＋ New request to start one.</span>':'')+'</div>'; return; }
   body.innerHTML='<div class="reqlist">'+list.map(t=>{ const units=t.items.reduce((n,i)=>n+(+i.qty||0),0);
-    const row='<button class="reqrow" data-id="'+esc(t.id)+'"><div><div class="rid">'+esc(t.id)+' <span class="sub" style="font-weight:500;font-size:13px">· '+esc(t.requester)+'</span></div>'+
+    const row='<button class="reqrow" data-id="'+esc(t.id)+'"><div><div class="rid">'+esc(t.id)+' <span class="sub" style="font-weight:500;font-size:13px">· '+esc(t.requester)+(t.to?' → '+esc(t.to):'')+'</span></div>'+
       '<div class="rmeta">'+esc(fmtTime(t.createdAt))+' · '+t.items.length+' line(s) · '+units+' units'+(t.note?' · “'+esc(t.note.slice(0,80))+(t.note.length>80?'…':'')+'”':'')+'</div>'+
       '<div class="ritems">'+esc(t.items.slice(0,4).map(i=>i.name+' ×'+i.qty).join(', '))+(t.items.length>4?' …':'')+'</div></div>'+stag(t.status)+'</button>';
     return adm ? '<div class="rowwrap">'+row+'<button class="rowdel" data-del="'+esc(t.id)+'" title="Delete this request">✕</button></div>' : row; }).join('')+'</div>'+
@@ -690,14 +699,15 @@ function renderReqs(){
 }
 $('#rqBack').onclick=goMenu;
 $('#rqNew').onclick=()=>enterNew();
-$('#rqCsv').onclick=()=>{ const rows=[['Request','Status','Requester','Created','Note','Item','Variation','Barcode','Requested','Approved','Prepared','Reviewed by','Reviewed at','Prepared by','Prepared at']];
-  for(const t of allT()) for(const i of t.items) rows.push([t.id,t.status,t.requester,fmtTime(t.createdAt),t.note||'',i.name,i.variation||'',i.barcode||'',i.qty,i.qtyApproved??'',i.qtyPrepared??'',t.reviewedBy||'',fmtTime(t.reviewedAt),t.preparedBy||'',fmtTime(t.preparedAt)]);
+$('#rqCsv').onclick=()=>{ const rows=[['Request','Status','Requester','Created','Deliver to','Note','Item','Variation','Barcode','Requested','Approved','Prepared','From','Reviewed by','Reviewed at','Prepared by','Prepared at']];
+  for(const t of allT()) for(const i of t.items) rows.push([t.id,t.status,t.requester,fmtTime(t.createdAt),t.to||'',t.note||'',i.name,i.variation||'',i.barcode||'',i.qty,i.qtyApproved??'',i.qtyPrepared??'',i.from||'',t.reviewedBy||'',fmtTime(t.reviewedAt),t.preparedBy||'',fmtTime(t.preparedAt)]);
   downloadCSV(rows,'transfer_history.csv'); toast('History exported','ok'); };
 
 /* ---------- new / draft ---------- */
 function enterNew(draft){
-  if(draft){ cartDraftId=draft.id; cart=draft.items.map(i=>Object.assign({},i)); $('#nwNote').value=draft.note||''; $('#nwTitle').textContent='✎ Draft '+draft.id; }
-  else { if(!cartDraftId) $('#nwNote').value=$('#nwNote').value||''; $('#nwTitle').textContent='＋ New request'; }
+  if(draft){ cartDraftId=draft.id; cart=draft.items.map(i=>Object.assign({},i)); $('#nwNote').value=draft.note||''; $('#nwTitle').textContent='✎ Draft '+draft.id; $('#nwTo').innerHTML=locOptions(draft.to||'','Choose a location…'); }
+  else { if(!cartDraftId) $('#nwNote').value=$('#nwNote').value||''; $('#nwTitle').textContent='＋ New request'; if(!$('#nwTo').options.length) $('#nwTo').innerHTML=locOptions('','Choose a location…'); }
+  $('#nwTo').classList.remove('missing');
   show('new'); renderNew(); setTimeout(()=>$('#nwQ').focus(),50);
 }
 function renderNew(){
@@ -730,15 +740,16 @@ $('#nwDraft').onclick=()=>saveRequest('draft');
 $('#nwSend').onclick=()=>saveRequest('pending');
 async function saveRequest(status){
   if(!cart.length){ toast('Add at least one product','warn'); return; }
-  const note=$('#nwNote').value.trim();
+  const note=$('#nwNote').value.trim(); const to=$('#nwTo').value||'';
+  if(status==='pending' && !to){ $('#nwTo').classList.add('missing'); $('#nwTo').focus(); toast('Choose where the products should be delivered','warn'); return; }
   if(status==='pending' && !note && !confirm('Send without a note? Reviewers will not know where the goods are going.')) return;
   const id=cartDraftId||newId(); const now=Date.now(); const ex=TR[id];
-  const t={ id, requester:MY_NAME, createdAt:(ex&&ex.createdAt)||now, updatedAt:now, status, note,
-    items:cart.map(i=>({ikey:i.ikey,name:i.name,variation:i.variation||'',barcode:i.barcode||'',image:i.image||'',qty:+i.qty||1,qtyApproved:null,qtyPrepared:null})),
+  const t={ id, requester:MY_NAME, createdAt:(ex&&ex.createdAt)||now, updatedAt:now, status, note, to,
+    items:cart.map(i=>({ikey:i.ikey,name:i.name,variation:i.variation||'',barcode:i.barcode||'',image:i.image||'',qty:+i.qty||1,qtyApproved:null,qtyPrepared:null,from:i.from||''})),
     log:((ex&&ex.log)||[]).concat([{at:now, by:MY_NAME, text:status==='pending'?'Request sent for review':'Draft saved'}]),
     submittedAt:status==='pending'?now:null };
   try{ await root.child('transfers/'+id).set(t); }catch(e){ toast('Could not save: '+(e.message||e),'err',4000); return; }
-  cart=[]; cartDraftId=null; $('#nwNote').value='';
+  cart=[]; cartDraftId=null; $('#nwNote').value=''; $('#nwTo').value='';
   toast(status==='pending'?'Request '+id+' sent':'Draft saved','ok');
   if(status==='pending') notify('new', Object.assign({},t));
   openReq(id);
@@ -759,21 +770,26 @@ function renderReq(){
   const editPrep= st==='approved' && prep;                             // prepared qty
   const showApp = ['approved','ready'].includes(st) || editApp;
   const showPrep= st==='ready' || editPrep;
+  const showFrom= showPrep;                                            // source location column
+  const fromAll = showFrom ? fromSummary(t.items) : '';
   const reqU=t.items.reduce((n,i)=>n+(+i.qty||0),0), appU=t.items.reduce((n,i)=>n+(+(i.qtyApproved??i.qty)||0),0), prepU=t.items.reduce((n,i)=>n+(+(i.qtyPrepared??0)||0),0);
   let h='<div class="card"><div class="srcrow"><div><div class="eyebrow" style="margin-bottom:4px">Request</div><div class="rid mono" style="font-size:22px;font-weight:700">'+esc(t.id)+'</div></div>'+stag(st)+'<div class="spacer"></div>'+
     '<div class="pill">by <b>'+esc(t.requester)+'</b></div><div class="pill">🗓 <b>'+esc(fmtTime(t.createdAt))+'</b></div></div>'+
+    '<div class="srcrow" style="margin-top:12px;gap:10px"><span class="eyebrow" style="margin:0">📍 Deliver to</span>'+(editQty?'<select id="dtTo" class="locsel sm'+(t.to?'':' missing')+'">'+locOptions(t.to||'','Choose a location…')+'</select>':'<b>'+esc(t.to||'—')+'</b>')+
+    (showFrom?'<span class="eyebrow" style="margin:0 0 0 14px">📦 Taken from</span>'+(editPrep?'<select id="dtFrom" class="locsel sm">'+'<option value="mixed"'+(fromAll==='mixed'?' selected':'')+(fromAll==='mixed'?'':' disabled')+'>Different locations</option>'+locOptions(fromAll==='mixed'?'':fromAll,fromAll===''?'Choose for all lines…':'')+'</select>':'<b>'+esc(fromAll==='mixed'?'Different locations':(fromAll||'—'))+'</b>'):'')+'</div>'+
     '<div class="statgrid" style="margin-top:14px">'+stat(t.items.length,'Lines','')+stat(reqU,'Requested','info')+(showApp?stat(appU,'Approved','warn'):'')+(showPrep?stat(prepU,'Prepared','ok'):'')+'</div>'+
     '<div class="eyebrow">Note</div>'+((st==='draft'||st==='pending')&&(mine||rev) ? '<textarea id="dtNote" class="tinput">'+esc(t.note||'')+'</textarea><button class="btn sm" id="dtNoteSave" style="margin-top:8px">Save note</button>' : '<p class="sub">'+(t.note?esc(t.note):'—')+'</p>')+
     (t.reviewedBy?'<p class="sub" style="font-size:12.5px;margin-top:8px">Reviewed by <b>'+esc(t.reviewedBy)+'</b> · '+esc(fmtTime(t.reviewedAt))+'</p>':'')+
     (t.preparedBy?'<p class="sub" style="font-size:12.5px">Prepared by <b>'+esc(t.preparedBy)+'</b> · '+esc(fmtTime(t.preparedAt))+'</p>':'')+'</div>';
   /* items */
   h+='<div class="card" style="margin-top:14px"><div class="srcrow"><h2 style="margin:0">Products</h2><div class="spacer"></div>'+(canEditLines(t)?'<button class="btn sm" id="dtAdd">＋ Add product</button>':'')+'</div>'+
-    '<table style="margin-top:10px"><thead><tr><th></th><th>Item</th><th class="num">Stock</th><th class="num">Requested</th>'+(showApp?'<th class="num">Approved</th>':'')+(showPrep?'<th class="num">Prepared</th>':'')+'<th></th></tr></thead><tbody>';
+    '<table style="margin-top:10px"><thead><tr><th></th><th>Item</th><th class="num">Stock</th><th class="num">Requested</th>'+(showApp?'<th class="num">Approved</th>':'')+(showPrep?'<th class="num">Prepared</th>':'')+(showFrom?'<th>From</th>':'')+'<th></th></tr></thead><tbody>';
   t.items.forEach((i,idx)=>{ const s=stockOf(i.ikey); const over=s!=null&&(+i.qty)>s;
     const cell=(field,on,val,ref)=>on?'<td class="num qtycell"><input type="number" min="0" data-f="'+field+'" data-i="'+idx+'" value="'+val+'"'+(ref!=null&&val!==ref?' class="diff"':'')+'></td>':'<td class="num'+(ref!=null&&val!==ref?' hl':'')+'">'+(val==null?'—':val)+'</td>';
     h+='<tr><td>'+img(i.image,i.name,'zoom')+'</td><td><b>'+esc(i.name)+'</b>'+(i.variation?'<br><span class="sub" style="font-size:12.5px">'+esc(i.variation)+'</span>':'')+(i.barcode?'<br><span class="mono" style="font-size:11px;color:var(--faint)">'+esc(i.barcode)+'</span>':'')+'</td>'+
       '<td class="num" style="color:'+(over?'var(--warn)':'var(--muted)')+'">'+(s==null?'—':fmtN(s))+(over?' ⚠':'')+'</td>'+
       cell('qty',editQty,i.qty)+(showApp?cell('qtyApproved',editApp,i.qtyApproved??i.qty,i.qty):'')+(showPrep?cell('qtyPrepared',editPrep,i.qtyPrepared??(i.qtyApproved??i.qty),i.qtyApproved??i.qty):'')+
+      (showFrom?'<td>'+(editPrep?'<select class="locsel sm'+(i.from?'':' missing')+'" data-from="'+idx+'">'+locOptions(i.from||'','Choose…')+'</select>':esc(i.from||'—'))+'</td>':'')+
       '<td>'+(canEditLines(t)?'<button class="rcdel" data-rm="'+idx+'">✕</button>':'')+'</td></tr>'; });
   h+='</tbody></table></div>';
   /* actions */
@@ -785,13 +801,16 @@ function renderReq(){
   if(MY_ROLE==='admin' && !(st==='draft'&&mine)) acts+='<button class="btn danger ghost" id="aDelete">Delete</button>';
   if(acts) h+='<div class="card" style="margin-top:14px"><div class="srcrow" style="justify-content:flex-end">'+acts+'</div>'+
     (editApp?'<p class="sub" style="font-size:12.5px;margin-top:10px">Adjust the <b>Approved</b> column, add or remove lines, then approve. The preparers get the approved quantities.</p>':'')+
-    (editPrep?'<p class="sub" style="font-size:12.5px;margin-top:10px">If something is short, lower the <b>Prepared</b> quantity before marking the request ready.</p>':'')+'</div>';
+    (editPrep?'<p class="sub" style="font-size:12.5px;margin-top:10px">Pick where each line is taken <b>from</b> (one location for all, or per line), and if something is short, lower the <b>Prepared</b> quantity before marking the request ready.</p>':'')+'</div>';
   /* log + comments */
   h+='<div class="card" style="margin-top:14px"><h2>Activity</h2>'+(t.log.length?t.log.slice().reverse().map(l=>'<div class="logrow'+(l.cmt?' cmt':'')+'"><span class="lt">'+esc(fmtTime(l.at))+'</span><span class="lb">'+esc(l.by)+'</span><span>'+esc(l.text)+'</span></div>').join(''):'<p class="sub">—</p>')+
     '<div class="srcrow" style="margin-top:12px"><input id="dtCmt" class="tinput" placeholder="Add a comment…" style="font-family:var(--body)"><button class="btn" id="dtCmtSend">Comment</button></div></div>';
   body.innerHTML=h;
   /* wiring */
   const nb=$('#dtNoteSave'); if(nb) nb.onclick=()=>patch(t,{note:$('#dtNote').value.trim()},'Note updated');
+  const ts=$('#dtTo'); if(ts) ts.onchange=()=>{ const v=ts.value; if(!v) return; patch(t,{to:v},'Deliver to: '+v); };
+  const fs=$('#dtFrom'); if(fs) fs.onchange=()=>{ const v=fs.value; if(!v||v==='mixed') return; const items=t.items.map(x=>Object.assign({},x,{from:v})); patch(t,{items},'All lines taken from '+v); };
+  $$('#dtBody [data-from]').forEach(sel=>sel.onchange=()=>{ const v=sel.value; if(!v) return; const i=t.items[+sel.dataset.from]; const items=t.items.map(x=>Object.assign({},x)); items[+sel.dataset.from].from=v; patch(t,{items},i.name+': from '+v); });
   const ab=$('#dtAdd'); if(ab) ab.onclick=()=>openPicker((v,n)=>{ const items=t.items.slice(); const ex=items.find(x=>x.ikey===v.ikey); if(ex) ex.qty+=n; else items.push(lineOf(v,n)); patch(t,{items},'Added '+v.name+' ×'+n); });
   $$('#dtBody [data-rm]').forEach(b=>b.onclick=()=>{ const i=t.items[+b.dataset.rm]; if(!confirm('Remove '+i.name+' from the request?')) return; const items=t.items.filter((_,k)=>k!==+b.dataset.rm); patch(t,{items},'Removed '+i.name); });
   $$('#dtBody [data-f]').forEach(inp=>inp.addEventListener('change',()=>{ const i=t.items[+inp.dataset.i]; const f=inp.dataset.f; const n=Math.max(0,parseInt(inp.value,10)||0); const was=i[f]??(f==='qtyApproved'?i.qty:(i.qtyApproved??i.qty)); if(n===was) return;
@@ -799,13 +818,14 @@ function renderReq(){
   const cs=$('#dtCmtSend'); if(cs){ const send=()=>{ const v=$('#dtCmt').value.trim(); if(!v) return; addLog(t,v,true); notify('comment',t,v); }; cs.onclick=send; $('#dtCmt').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); send(); } }); }
   const on=(id,fn)=>{ const b=$('#'+id); if(b) b.onclick=fn; };
   on('aEdit',()=>enterNew(t));
-  on('aSend',()=>{ if(!t.items.length){ toast('Add products first','warn'); return; } patch(t,{status:'pending',submittedAt:Date.now()},'Request sent for review').then(()=>notify('new',TR[t.id]||t)); });
+  on('aSend',()=>{ if(!t.items.length){ toast('Add products first','warn'); return; } if(!t.to){ toast('Choose where the products should be delivered','warn'); const e=$('#dtTo'); if(e){ e.classList.add('missing'); e.focus(); } return; } patch(t,{status:'pending',submittedAt:Date.now()},'Request sent for review').then(()=>notify('new',TR[t.id]||t)); });
   on('aCancel',()=>{ if(!confirm('Cancel this request?')) return; patch(t,{status:'cancelled'},'Request cancelled').then(()=>notify('cancelled',TR[t.id]||t)); });
   on('aReject',()=>{ const why=prompt('Reason for rejecting (sent to the requester):',''); if(why===null) return; patch(t,{status:'rejected',reviewedBy:MY_NAME,reviewedAt:Date.now()},'Rejected'+(why?': '+why:'')).then(()=>notify('rejected',TR[t.id]||t,why)); });
   on('aApprove',()=>{ const items=t.items.map(x=>Object.assign({},x,{qtyApproved:x.qtyApproved??x.qty})); const zero=items.filter(x=>!x.qtyApproved).length;
     if(!confirm('Approve this transfer?\n'+items.length+' line(s) · '+items.reduce((n,x)=>n+x.qtyApproved,0)+' units'+(zero?'\n('+zero+' line(s) approved at 0 — they will be dropped)':''))) return;
     patch(t,{items:items.filter(x=>x.qtyApproved>0),status:'approved',reviewedBy:MY_NAME,reviewedAt:Date.now()},'Approved · '+items.reduce((n,x)=>n+x.qtyApproved,0)+' units').then(()=>notify('approved',TR[t.id]||t)); });
   on('aReady',()=>{ const items=t.items.map(x=>Object.assign({},x,{qtyPrepared:x.qtyPrepared??(x.qtyApproved??x.qty)})); const short=items.filter(x=>x.qtyPrepared<(x.qtyApproved??x.qty));
+    const noFrom=items.filter(x=>x.qtyPrepared>0&&!x.from); if(noFrom.length){ toast('Choose where each line is taken from ('+noFrom.length+' missing)','warn',3500); const e=$('#dtBody [data-from]'); if(e) e.focus(); return; }
     if(!confirm('Mark as ready for transfer?\n'+items.reduce((n,x)=>n+x.qtyPrepared,0)+' units prepared'+(short.length?'\n'+short.length+' line(s) short: '+short.map(x=>x.name+' '+x.qtyPrepared+'/'+(x.qtyApproved??x.qty)).join(', '):''))) return;
     patch(t,{items,status:'ready',preparedBy:MY_NAME,preparedAt:Date.now()},'Ready for transfer · '+items.reduce((n,x)=>n+x.qtyPrepared,0)+' units'+(short.length?' ('+short.length+' short)':'')).then(()=>notify('ready',TR[t.id]||t)); });
   on('aDelete',async()=>{ if(!confirm('Delete '+t.id+' permanently?')) return; await root.child('transfers/'+t.id).remove(); toast('Deleted','ok'); enterReqs(); });
