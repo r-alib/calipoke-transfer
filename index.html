@@ -339,7 +339,9 @@ td.num,th.num{text-align:right; font-family:var(--mono)}
       <div class="pill">Lines <b id="nwCount">0</b> · units <b id="nwUnits">0</b></div>
     </div>
     <div class="scanwrap">
-      <div class="locrow"><span class="lbl">📍 Deliver to</span><select id="nwTo" class="locsel"></select><span class="hint">where the products should arrive</span></div>
+      <div class="locrow"><span class="lbl">Request</span><div class="chipbar" id="nwType" style="margin:0"></div></div>
+      <div class="locrow" id="nwToRow"><span class="lbl">📍 Deliver to</span><select id="nwTo" class="locsel"></select><span class="hint" id="nwToHint">where the products should arrive</span></div>
+      <div class="locrow hide" id="nwNameRow"><span class="lbl" id="nwNameLbl">🎲 Game</span><input id="nwName" class="tinput" style="max-width:360px;font-family:var(--body)" placeholder=""><span class="hint" id="nwNameHint"></span></div>
       <div class="scanhead"><span class="mode items">Add products</span><span class="who">name · barcode · camera</span></div>
       <div class="scanrow">
         <input id="nwQ" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type a name or scan a barcode…">
@@ -412,7 +414,13 @@ const ROLES = {
 };
 const ELEVATED_PIN = '0515';                      // asked from admin / celina / andre
 const LOGO_URL = "https://i.postimg.cc/VkfXDqWf/images.jpg";
-const BUILD = '2026-10-30a';
+const BUILD = '2026-11-10a';
+/* CPH INVENTORY (stock by location) — Streaming Game / Card Show requests land there */
+const INVENTORY_APP_URL = 'https://cali-poke-house.github.io/cph-inventory/';   // TODO: real GitHub Pages address
+/* request types */
+const RTYPES={transfer:{label:'Transfer',icon:'🚚',prefix:'TR',to:null},game:{label:'Streaming Game',icon:'🎲',prefix:'SG',to:'Stockroom'},show:{label:'Card Show',icon:'🚐',prefix:'CS',to:'Card Show'}};
+const rtype=t=>RTYPES[t&&t.type]?t.type:'transfer';
+function rtag(t){ const r=RTYPES[rtype(t)]; return rtype(t)==='transfer'?'':'<span class="statustag" style="background:#231a3a;color:#A98BF5">'+r.icon+' '+esc(r.label)+(t.gameName?' · '+esc(t.gameName):t.showName?' · '+esc(t.showName):'')+'</span> '; }
 const INV_CACHE_MS = 20*60*1000;
 const STATION_PATH = 'packstation';
 /* ============================================================ */
@@ -627,10 +635,17 @@ $('#rvCsv').onclick=()=>{ const rows=[['Date','Supplier','Status','Item','Variat
    TRANSFER REQUESTS
    ============================================================ */
 const LOCATIONS=['Warehouse','Stockroom','Tiktok 1','Ebay','What Not','Single & Slab'];
-function locOptions(sel, blank){ return (blank?'<option value="">'+blank+'</option>':'')+LOCATIONS.map(l=>'<option value="'+esc(l)+'"'+(l===sel?' selected':'')+'>'+esc(l)+'</option>').join(''); }
+function locOptions(sel, blank){ return (blank?'<option value="">'+blank+'</option>':'')+LOCATIONS.concat(['Card Show']).map(l=>'<option value="'+esc(l)+'"'+(l===sel?' selected':'')+'>'+esc(l)+'</option>').join(''); }
 function fromSummary(items){ const f=[...new Set(items.map(i=>i.from||''))]; return f.length===1?f[0]:'mixed'; }
 let cart=[], cartDraftId=null;    // items being composed; draft id when editing a saved draft
-const newId=()=>{ const d=new Date(); return 'TR-'+String(d.getFullYear()).slice(2)+pad2(d.getMonth()+1)+pad2(d.getDate())+'-'+Math.random().toString(36).slice(2,6).toUpperCase(); };
+const newId=(type)=>{ const d=new Date(); return (RTYPES[type]||RTYPES.transfer).prefix+'-'+String(d.getFullYear()).slice(2)+pad2(d.getMonth()+1)+pad2(d.getDate())+'-'+Math.random().toString(36).slice(2,6).toUpperCase(); };
+let nwTypeSel='transfer';
+function setNwType(type){ nwTypeSel=RTYPES[type]?type:'transfer'; const r=RTYPES[nwTypeSel];
+  $('#nwType').innerHTML=Object.keys(RTYPES).map(k=>'<button class="chip'+(k===nwTypeSel?' on':'')+'" data-rt="'+k+'">'+RTYPES[k].icon+' '+RTYPES[k].label+'</button>').join(''); $$('#nwType [data-rt]').forEach(b=>b.onclick=()=>setNwType(b.dataset.rt));
+  $('#nwToRow').classList.toggle('hide',nwTypeSel==='game'); $('#nwNameRow').classList.toggle('hide',nwTypeSel==='transfer');
+  if(nwTypeSel==='show'){ $('#nwTo').value='Card Show'; $('#nwTo').disabled=true; $('#nwToHint').textContent='a sub-location for this show is created in CPH INVENTORY'; $('#nwNameLbl').textContent='🚐 Show'; $('#nwName').placeholder='e.g. Frank & Son · 11/15'; $('#nwNameHint').textContent='show name and date'; }
+  else if(nwTypeSel==='game'){ $('#nwTo').disabled=true; $('#nwNameLbl').textContent='🎲 Game'; $('#nwName').placeholder='e.g. Koi Bag Game 11/12 · TT1'; $('#nwNameHint').textContent='goods go to the Stockroom into this game — the list is finished in CPH INVENTORY'; }
+  else { $('#nwTo').disabled=false; if(!$('#nwTo').value||$('#nwTo').value==='Card Show') $('#nwTo').value='Stockroom'; $('#nwToHint').textContent='where the products should arrive'; } }
 function normT(raw,id){ if(!raw) return null; const t=Object.assign({id}, raw); t.items=arr(raw.items).map(i=>Object.assign({qty:0}, i)); t.log=arr(raw.log); t.status=t.status||'draft'; return t; }
 function lineOf(v,qty){ return {ikey:v.ikey, name:v.name, variation:varOf(v.variation), barcode:barcodesOf(v.barcode)[0]||'', image:v.image||'', qty:qty, qtyApproved:null, qtyPrepared:null}; }
 function cartAdd(v,qty){ const ex=cart.find(c=>c.ikey===v.ikey); if(ex) ex.qty+=qty; else cart.push(lineOf(v,qty)); renderNew(); }
@@ -665,7 +680,7 @@ function openPicker(done){
 let pickerDecode=null;
 
 /* ---------- list ---------- */
-let rqTab='', rqSt='';
+let rqTab='', rqSt='', rqTy='';
 /* elevated roles land on "Active" — everything that needs their attention right now */
 function enterReqs(){ show('reqs'); if(!rqTab) rqTab = canPrepare() ? 'active' : 'mine'; if(rqTab==='review' && !canReview()) rqTab='mine'; if((rqTab==='prepare'||rqTab==='active') && !canPrepare()) rqTab='mine'; renderReqs(); }
 function allT(){ return Object.values(TR).sort((a,b)=>(b.updatedAt||b.createdAt||0)-(a.updatedAt||a.createdAt||0)); }
@@ -681,14 +696,14 @@ function renderReqs(){
   $('#rqTabs').innerHTML=tabs.map(([k,l,n])=>'<button class="chip'+(rqTab===k?' on':'')+'" data-t="'+k+'">'+l+' <span class="n">'+n+'</span></button>').join('');
   $$('#rqTabs [data-t]').forEach(b=>b.onclick=()=>{ rqTab=b.dataset.t; renderReqs(); });
   const sts=['draft','pending','approved','ready','rejected','cancelled'];
-  $('#rqStatus').innerHTML='<span class="sub" style="font-size:12.5px">Status:</span>'+sts.map(s=>'<button class="chip'+(rqSt===s?' on':'')+'" data-s="'+s+'">'+s+'</button>').join('');
-  $$('#rqStatus [data-s]').forEach(b=>b.onclick=()=>{ rqSt=rqSt===b.dataset.s?'':b.dataset.s; renderReqs(); });
-  let list=reqsForTab(rqTab); if(rqSt) list=list.filter(t=>t.status===rqSt);
+  $('#rqStatus').innerHTML='<span class="sub" style="font-size:12.5px">Status:</span>'+sts.map(s=>'<button class="chip'+(rqSt===s?' on':'')+'" data-s="'+s+'">'+s+'</button>').join('')+'<span class="sub" style="font-size:12.5px;margin-left:10px">Type:</span>'+Object.keys(RTYPES).map(k=>'<button class="chip'+(rqTy===k?' on':'')+'" data-ty="'+k+'">'+RTYPES[k].icon+' '+RTYPES[k].label+'</button>').join('');
+  $$('#rqStatus [data-s]').forEach(b=>b.onclick=()=>{ rqSt=rqSt===b.dataset.s?'':b.dataset.s; renderReqs(); }); $$('#rqStatus [data-ty]').forEach(b=>b.onclick=()=>{ rqTy=rqTy===b.dataset.ty?'':b.dataset.ty; renderReqs(); });
+  let list=reqsForTab(rqTab); if(rqSt) list=list.filter(t=>t.status===rqSt); if(rqTy) list=list.filter(t=>rtype(t)===rqTy);
   const body=$('#rqBody');
   const adm=MY_ROLE==='admin';
   if(!list.length){ body.innerHTML='<div class="empty">'+(rqTab==='active'?'Nothing needs your attention right now.':'Nothing here.')+(rqTab==='mine'?'<br><span style="font-size:13px">Tap ＋ New request to start one.</span>':'')+'</div>'; return; }
   body.innerHTML='<div class="reqlist">'+list.map(t=>{ const units=t.items.reduce((n,i)=>n+(+i.qty||0),0);
-    const row='<button class="reqrow" data-id="'+esc(t.id)+'"><div><div class="rid">'+esc(t.id)+' <span class="sub" style="font-weight:500;font-size:13px">· '+esc(t.requester)+(t.to?' → '+esc(t.to):'')+'</span></div>'+
+    const row='<button class="reqrow" data-id="'+esc(t.id)+'"><div><div class="rid">'+rtag(t)+esc(t.id)+' <span class="sub" style="font-weight:500;font-size:13px">· '+esc(t.requester)+(t.to?' → '+esc(t.to):'')+'</span></div>'+
       '<div class="rmeta">'+esc(fmtTime(t.createdAt))+' · '+t.items.length+' line(s) · '+units+' units'+(t.note?' · “'+esc(t.note.slice(0,80))+(t.note.length>80?'…':'')+'”':'')+'</div>'+
       '<div class="ritems">'+esc(t.items.slice(0,4).map(i=>i.name+' ×'+i.qty).join(', '))+(t.items.length>4?' …':'')+'</div></div>'+stag(t.status)+'</button>';
     return adm ? '<div class="rowwrap">'+row+'<button class="rowdel" data-del="'+esc(t.id)+'" title="Delete this request">✕</button></div>' : row; }).join('')+'</div>'+
@@ -699,14 +714,14 @@ function renderReqs(){
 }
 $('#rqBack').onclick=goMenu;
 $('#rqNew').onclick=()=>enterNew();
-$('#rqCsv').onclick=()=>{ const rows=[['Request','Status','Requester','Created','Deliver to','Note','Item','Variation','Barcode','Requested','Approved','Prepared','From','Reviewed by','Reviewed at','Prepared by','Prepared at']];
-  for(const t of allT()) for(const i of t.items) rows.push([t.id,t.status,t.requester,fmtTime(t.createdAt),t.to||'',t.note||'',i.name,i.variation||'',i.barcode||'',i.qty,i.qtyApproved??'',i.qtyPrepared??'',i.from||'',t.reviewedBy||'',fmtTime(t.reviewedAt),t.preparedBy||'',fmtTime(t.preparedAt)]);
+$('#rqCsv').onclick=()=>{ const rows=[['Request','Type','Game / Show','Status','Requester','Created','Deliver to','Note','Item','Variation','Barcode','Requested','Approved','Prepared','From','Reviewed by','Reviewed at','Prepared by','Prepared at']];
+  for(const t of allT()) for(const i of t.items) rows.push([t.id,RTYPES[rtype(t)].label,t.gameName||t.showName||'',t.status,t.requester,fmtTime(t.createdAt),t.to||'',t.note||'',i.name,i.variation||'',i.barcode||'',i.qty,i.qtyApproved??'',i.qtyPrepared??'',i.from||'',t.reviewedBy||'',fmtTime(t.reviewedAt),t.preparedBy||'',fmtTime(t.preparedAt)]);
   downloadCSV(rows,'transfer_history.csv'); toast('History exported','ok'); };
 
 /* ---------- new / draft ---------- */
 function enterNew(draft){
-  if(draft){ cartDraftId=draft.id; cart=draft.items.map(i=>Object.assign({},i)); $('#nwNote').value=draft.note||''; $('#nwTitle').textContent='✎ Draft '+draft.id; $('#nwTo').innerHTML=locOptions(draft.to||'','Choose a location…'); }
-  else { if(!cartDraftId) $('#nwNote').value=$('#nwNote').value||''; $('#nwTitle').textContent='＋ New request'; if(!$('#nwTo').options.length) $('#nwTo').innerHTML=locOptions('','Choose a location…'); }
+  if(draft){ cartDraftId=draft.id; cart=draft.items.map(i=>Object.assign({},i)); $('#nwNote').value=draft.note||''; $('#nwTitle').textContent='✎ Draft '+draft.id; $('#nwTo').innerHTML=locOptions(draft.to||'','Choose a location…'); $('#nwName').value=draft.gameName||draft.showName||''; setNwType(rtype(draft)); }
+  else { if(!cartDraftId) $('#nwNote').value=$('#nwNote').value||''; $('#nwTitle').textContent='＋ New request'; if(!$('#nwTo').options.length) $('#nwTo').innerHTML=locOptions('Stockroom','Choose a location…'); if(!cartDraftId) $('#nwName').value=''; setNwType(cartDraftId?nwTypeSel:'transfer'); }
   $('#nwTo').classList.remove('missing');
   show('new'); renderNew(); setTimeout(()=>$('#nwQ').focus(),50);
 }
@@ -740,16 +755,17 @@ $('#nwDraft').onclick=()=>saveRequest('draft');
 $('#nwSend').onclick=()=>saveRequest('pending');
 async function saveRequest(status){
   if(!cart.length){ toast('Add at least one product','warn'); return; }
-  const note=$('#nwNote').value.trim(); const to=$('#nwTo').value||'';
+  const note=$('#nwNote').value.trim(); const type=nwTypeSel; const name=$('#nwName').value.trim(); const to=type==='transfer'?($('#nwTo').value||''):RTYPES[type].to;
+  if(status==='pending' && type!=='transfer' && name.length<2){ $('#nwName').focus(); toast(type==='game'?'Name the game':'Name the show (and its date)','warn'); return; }
   if(status==='pending' && !to){ $('#nwTo').classList.add('missing'); $('#nwTo').focus(); toast('Choose where the products should be delivered','warn'); return; }
   if(status==='pending' && !note && !confirm('Send without a note? Reviewers will not know where the goods are going.')) return;
-  const id=cartDraftId||newId(); const now=Date.now(); const ex=TR[id];
-  const t={ id, requester:MY_NAME, createdAt:(ex&&ex.createdAt)||now, updatedAt:now, status, note, to,
+  const id=cartDraftId||newId(type); const now=Date.now(); const ex=TR[id];
+  const t={ id, type, gameName:type==='game'?name:null, showName:type==='show'?name:null, requester:MY_NAME, createdAt:(ex&&ex.createdAt)||now, updatedAt:now, status, note, to,
     items:cart.map(i=>({ikey:i.ikey,name:i.name,variation:i.variation||'',barcode:i.barcode||'',image:i.image||'',qty:+i.qty||1,qtyApproved:null,qtyPrepared:null,from:i.from||''})),
     log:((ex&&ex.log)||[]).concat([{at:now, by:MY_NAME, text:status==='pending'?'Request sent for review':'Draft saved'}]),
     submittedAt:status==='pending'?now:null };
   try{ await root.child('transfers/'+id).set(t); }catch(e){ toast('Could not save: '+(e.message||e),'err',4000); return; }
-  cart=[]; cartDraftId=null; $('#nwNote').value=''; $('#nwTo').value='';
+  cart=[]; cartDraftId=null; $('#nwNote').value=''; $('#nwTo').value='Stockroom'; $('#nwName').value=''; nwTypeSel='transfer';
   toast(status==='pending'?'Request '+id+' sent':'Draft saved','ok');
   if(status==='pending') notify('new', Object.assign({},t));
   openReq(id);
@@ -773,9 +789,11 @@ function renderReq(){
   const showFrom= showPrep;                                            // source location column
   const fromAll = showFrom ? fromSummary(t.items) : '';
   const reqU=t.items.reduce((n,i)=>n+(+i.qty||0),0), appU=t.items.reduce((n,i)=>n+(+(i.qtyApproved??i.qty)||0),0), prepU=t.items.reduce((n,i)=>n+(+(i.qtyPrepared??0)||0),0);
-  let h='<div class="card"><div class="srcrow"><div><div class="eyebrow" style="margin-bottom:4px">Request</div><div class="rid mono" style="font-size:22px;font-weight:700">'+esc(t.id)+'</div></div>'+stag(st)+'<div class="spacer"></div>'+
+  const ty=rtype(t); const invLink=ty==='game'?INVENTORY_APP_URL+'#loc/stockroom/subs':ty==='show'?INVENTORY_APP_URL+'#loc/cardshow/subs':'';
+  let h='<div class="card"><div class="srcrow"><div><div class="eyebrow" style="margin-bottom:4px">'+RTYPES[ty].icon+' '+esc(RTYPES[ty].label)+' request</div><div class="rid mono" style="font-size:22px;font-weight:700">'+esc(t.id)+'</div></div>'+stag(st)+'<div class="spacer"></div>'+
     '<div class="pill">by <b>'+esc(t.requester)+'</b></div><div class="pill">🗓 <b>'+esc(fmtTime(t.createdAt))+'</b></div></div>'+
-    '<div class="srcrow" style="margin-top:12px;gap:10px"><span class="eyebrow" style="margin:0">📍 Deliver to</span>'+(editQty?'<select id="dtTo" class="locsel sm'+(t.to?'':' missing')+'">'+locOptions(t.to||'','Choose a location…')+'</select>':'<b>'+esc(t.to||'—')+'</b>')+
+    (ty!=='transfer'?'<div class="srcrow" style="margin-top:12px;gap:10px"><span class="eyebrow" style="margin:0">'+(ty==='game'?'🎲 Game':'🚐 Show')+'</span>'+(editQty?'<input id="dtName" class="tinput" style="max-width:360px;font-family:var(--body)" value="'+esc(t.gameName||t.showName||'')+'">':'<b>'+esc(t.gameName||t.showName||'—')+'</b>')+(invLink?'<a class="btn sm" href="'+invLink+'" target="_blank">↗ '+(ty==='game'?'Prepare the game in CPH INVENTORY':'Open the show in CPH INVENTORY')+'</a>':'')+'</div>':'')+
+    '<div class="srcrow" style="margin-top:12px;gap:10px"><span class="eyebrow" style="margin:0">📍 Deliver to</span>'+(editQty&&ty==='transfer'?'<select id="dtTo" class="locsel sm'+(t.to?'':' missing')+'">'+locOptions(t.to||'','Choose a location…')+'</select>':'<b>'+esc(t.to||'—')+'</b>'+(ty==='game'?' <span class="sub" style="font-size:12.5px">(into the game, ready for prep)</span>':ty==='show'?' <span class="sub" style="font-size:12.5px">(a sub-location for the show)</span>':''))+
     (showFrom?'<span class="eyebrow" style="margin:0 0 0 14px">📦 Taken from</span>'+(editPrep?'<select id="dtFrom" class="locsel sm">'+'<option value="mixed"'+(fromAll==='mixed'?' selected':'')+(fromAll==='mixed'?'':' disabled')+'>Different locations</option>'+locOptions(fromAll==='mixed'?'':fromAll,fromAll===''?'Choose for all lines…':'')+'</select>':'<b>'+esc(fromAll==='mixed'?'Different locations':(fromAll||'—'))+'</b>'):'')+'</div>'+
     '<div class="statgrid" style="margin-top:14px">'+stat(t.items.length,'Lines','')+stat(reqU,'Requested','info')+(showApp?stat(appU,'Approved','warn'):'')+(showPrep?stat(prepU,'Prepared','ok'):'')+'</div>'+
     '<div class="eyebrow">Note</div>'+((st==='draft'||st==='pending')&&(mine||rev) ? '<textarea id="dtNote" class="tinput">'+esc(t.note||'')+'</textarea><button class="btn sm" id="dtNoteSave" style="margin-top:8px">Save note</button>' : '<p class="sub">'+(t.note?esc(t.note):'—')+'</p>')+
@@ -809,6 +827,7 @@ function renderReq(){
   /* wiring */
   const nb=$('#dtNoteSave'); if(nb) nb.onclick=()=>patch(t,{note:$('#dtNote').value.trim()},'Note updated');
   const ts=$('#dtTo'); if(ts) ts.onchange=()=>{ const v=ts.value; if(!v) return; patch(t,{to:v},'Deliver to: '+v); };
+  const dn=$('#dtName'); if(dn) dn.addEventListener('change',()=>{ const v=dn.value.trim(); if(!v||v===(t.gameName||t.showName)) return; patch(t,ty==='game'?{gameName:v}:{showName:v},(ty==='game'?'Game: ':'Show: ')+v); });
   const fs=$('#dtFrom'); if(fs) fs.onchange=()=>{ const v=fs.value; if(!v||v==='mixed') return; const items=t.items.map(x=>Object.assign({},x,{from:v})); patch(t,{items},'All lines taken from '+v); };
   $$('#dtBody [data-from]').forEach(sel=>sel.onchange=()=>{ const v=sel.value; if(!v) return; const i=t.items[+sel.dataset.from]; const items=t.items.map(x=>Object.assign({},x)); items[+sel.dataset.from].from=v; patch(t,{items},i.name+': from '+v); });
   const ab=$('#dtAdd'); if(ab) ab.onclick=()=>openPicker((v,n)=>{ const items=t.items.slice(); const ex=items.find(x=>x.ikey===v.ikey); if(ex) ex.qty+=n; else items.push(lineOf(v,n)); patch(t,{items},'Added '+v.name+' ×'+n); });
