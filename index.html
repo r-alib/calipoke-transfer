@@ -9,6 +9,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-auth-compat.js"></script>
+<script src="https://r-alib.github.io/calipoke-admin/calipoke-auth.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <style>
@@ -242,20 +244,6 @@ td.num,th.num{text-align:right; font-family:var(--mono)}
 <body>
 
 <!-- ============ NAME GATE ============ -->
-<div class="namegate" id="namegate">
-  <div class="box">
-    <div class="gatebrand">
-      <img class="brandlogo xl hide" id="logoGate" alt="logo"><span class="dot big" id="dotGate"></span>
-      <div class="gatetitle">CALIPOKE TRANSFER</div>
-      <div class="gatesub" id="gateSub">Calipokehouse · stock · receivings · transfers</div>
-    </div>
-    <h1 id="gateTitle">Enter your name</h1>
-    <p class="sub" id="gateHint">Your name shows on every request you create.</p>
-    <input id="nameInput" class="tinput" autocomplete="off" placeholder="e.g. Joe" maxlength="24">
-    <input id="pinInput" class="tinput hide" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN">
-    <button class="btn primary lg" id="enterBtn" style="width:100%">Continue</button>
-  </div>
-</div>
 
 <header class="hide" id="appHeader">
   <div class="brand"><img class="brandlogo hide" id="logoHeader" alt="logo"><span class="dot" id="dotHeader"></span><div>CALIPOKE TRANSFER<small id="meName">—</small></div></div>
@@ -263,7 +251,7 @@ td.num,th.num{text-align:right; font-family:var(--mono)}
   <div class="pill" id="invPill" title="Products loaded">📦 <b id="invCount">0</b></div>
   <div class="pill" id="buildTag" style="font-size:11px; color:var(--faint)">v—</div>
   <button class="iconbtn" id="homeBtn" title="Main menu">▤</button>
-  <button class="iconbtn" id="logoutBtn" title="Change user">⇆</button>
+  <div id="hdrUser"></div>
 </header>
 
 <main class="hide" id="appMain">
@@ -407,14 +395,10 @@ const INVENTORY_SHEET_URL = 'https://docs.google.com/spreadsheets/d/13vYpuca93GK
    Leave empty to run without Slack. */
 const SLACK_PROXY_URL = 'https://script.google.com/macros/s/AKfycbzQjkmHSg9fh-diBIRyN-GK4DcWeZn_EAHGBqypDEhl8Bia3FYHM9Txq-tLaKPK2n1Y9g/exec';
 /* Names and roles. Names are matched case-insensitively. */
-const ROLES = {
-  admin:    ['admin','rufat','sonia','henry'],   // review + prepare
-  reviewer: ['celina'],                           // review + prepare
-  preparer: ['andre']                             // prepare only
-};
-const ELEVATED_PIN = '0515';                      // asked from admin / celina / andre
+/* sign-in, roles (Approve = Admin · Prepare = Admin / WH Backend / Receiver) and the activity history come from calipoke-auth.js (CALIPOKE ADMIN) */
+function alog(action,d){ try{ if(window.CPAuth) CPAuth.log(action,d); }catch(e){} }
 const LOGO_URL = "https://i.postimg.cc/VkfXDqWf/images.jpg";
-const BUILD = '2026-11-10a';
+const BUILD = '2026-11-11a · sign-in';
 /* CPH INVENTORY (stock by location) — Streaming Game / Card Show requests land there */
 const INVENTORY_APP_URL = 'https://cali-poke-house.github.io/cph-inventory/';   // TODO: real GitHub Pages address
 /* request types */
@@ -457,9 +441,9 @@ let curScreen='menu';
 let camScanner=null, camTarget='', camLast={code:'',t:0};
 let actx=null;
 
-function roleOf(n){ n=norm(n); if(ROLES.admin.includes(n)) return 'admin'; if(ROLES.reviewer.includes(n)) return 'reviewer'; if(ROLES.preparer.includes(n)) return 'preparer'; return 'staff'; }
-const canReview  = () => MY_ROLE==='admin' || MY_ROLE==='reviewer';
-const canPrepare = () => MY_ROLE!=='staff';
+function roleOf(n){ return 'staff'; }   // roles now come from CALIPOKE ADMIN
+const canReview  = () => window.CPAuth&&CPAuth.user ? CPAuth.can('approve','transfer') : MY_ROLE==='admin';
+const canPrepare = () => window.CPAuth&&CPAuth.user ? CPAuth.can('prepare','transfer') : MY_ROLE!=='staff';
 const isMine = t => norm(t.requester)===norm(MY_NAME);
 
 /* ============================================================
@@ -766,7 +750,7 @@ async function saveRequest(status){
     submittedAt:status==='pending'?now:null };
   try{ await root.child('transfers/'+id).set(t); }catch(e){ toast('Could not save: '+(e.message||e),'err',4000); return; }
   cart=[]; cartDraftId=null; $('#nwNote').value=''; $('#nwTo').value='Stockroom'; $('#nwName').value=''; nwTypeSel='transfer';
-  toast(status==='pending'?'Request '+id+' sent':'Draft saved','ok');
+  toast(status==='pending'?'Request '+id+' sent':'Draft saved','ok'); alog(status==='pending'?'transfer_request':'transfer_draft',{text:id+' → '+(to||'')+' · '+t.items.length+' line(s)',ref:id});
   if(status==='pending') notify('new', Object.assign({},t));
   openReq(id);
 }
@@ -852,7 +836,7 @@ function renderReq(){
 async function patch(t, fields, logText){
   const now=Date.now(); const log=(t.log||[]).concat(logText?[{at:now,by:MY_NAME,text:logText}]:[]);
   try{ await root.child('transfers/'+t.id).update(Object.assign({}, fields, {updatedAt:now, log})); }catch(e){ toast('Save failed: '+(e.message||e),'err',4000); throw e; }
-  if(logText) toast(logText,'ok',1800);
+  if(logText) toast(logText,'ok',1800); if(logText) alog('transfer_'+String(fields.status||'update'),{text:t.id+' · '+logText,ref:t.id});
 }
 async function addLog(t, text, cmt){ const now=Date.now(); await root.child('transfers/'+t.id).update({updatedAt:now, log:(t.log||[]).concat([{at:now,by:MY_NAME,text,cmt:!!cmt}])}); }
 $('#dtBack').onclick=enterReqs;
@@ -937,43 +921,22 @@ function renderCurrent(){ if(curScreen==='menu') renderMenu(); else if(curScreen
 function handleHash(){ const m=/^#req\/(.+)$/.exec(location.hash||''); if(m){ const id=decodeURIComponent(m[1]); if(TR[id]) openReq(id); else if(Object.keys(TR).length) toast('Request '+id+' not found','warn'); } }
 window.addEventListener('hashchange',handleHash);
 $('#homeBtn').onclick=goMenu;
-$('#logoutBtn').onclick=()=>{ location.hash=''; location.reload(); };
 
 /* ============================================================
    GATE + BOOT
    ============================================================ */
 function connect(){
-  firebase.initializeApp(firebaseConfig); db=firebase.database(); root=db.ref(STATION_PATH);
+  const app=(firebase.apps||[]).find(a=>a.options.projectId===firebaseConfig.projectId)||firebase.initializeApp(firebaseConfig); db=firebase.database(app); root=db.ref(STATION_PATH);
   root.child('presence/tr_'+Math.random().toString(36).slice(2,8)).set({name:MY_NAME, app:'transfer', at:Date.now()}).catch(()=>{});
   root.child('receiving/sessions').on('value',snap=>{ RC=[]; snap.forEach(c=>{ const s=normSession(c.val()); if(s) RC.push(s); }); RC.sort((a,b)=>(b.startedAt||0)-(a.startedAt||0)); if(curScreen==='recv') renderRecv(); });
   let first=true;
   root.child('transfers').on('value',snap=>{ TR={}; snap.forEach(c=>{ const t=normT(c.val(),c.key); if(t) TR[t.id]=t; }); renderCurrent(); if(first){ first=false; handleHash(); } });
   loadInventory(false);
 }
-function enter(){
-  const v=$('#nameInput').value.trim();
-  if(v.length<2){ $('#nameInput').focus(); toast('Enter your name','warn'); return; }
-  const role=roleOf(v);
-  if(role!=='staff'){
-    const pin=$('#pinInput');
-    if(pin.classList.contains('hide')){ pin.classList.remove('hide'); $('#gateHint').textContent='This name has extra permissions — enter the PIN.'; pin.focus(); return; }
-    if(pin.value.trim()!==ELEVATED_PIN){ toast('Wrong PIN','err'); pin.value=''; pin.focus(); return; }
-  }
-  MY_NAME=v; MY_ROLE=role; try{ localStorage.setItem('tr.name',v); }catch(e){}
-  $('#meName').textContent=MY_NAME+(role!=='staff'?' · '+role:'');
-  $('#namegate').classList.add('hide'); $('#appHeader').classList.remove('hide'); $('#appMain').classList.remove('hide');
-  goMenu(); connect();
-}
-$('#enterBtn').onclick=enter;
-$('#nameInput').addEventListener('keydown',e=>{ if(e.key==='Enter') enter(); });
-$('#nameInput').addEventListener('input',()=>{ const p=$('#pinInput'); if(roleOf($('#nameInput').value)==='staff'){ p.classList.add('hide'); p.value=''; $('#gateHint').textContent='Your name shows on every request you create.'; } });
-$('#pinInput').addEventListener('keydown',e=>{ if(e.key==='Enter') enter(); });
-(function boot(){
-  const saved=(()=>{ try{ return localStorage.getItem('tr.name'); }catch(e){ return null; } })();
-  if(saved){ $('#nameInput').value=saved; if(roleOf(saved)!=='staff'){ $('#pinInput').classList.remove('hide'); $('#gateHint').textContent='This name has extra permissions — enter the PIN.'; } }
-  applyLogo(); $('#buildTag').textContent='v'+BUILD; $('#gateSub').textContent='Calipokehouse · stock · receivings · transfers · v'+BUILD;
-  if(!SLACK_PROXY_URL) console.warn('SLACK_PROXY_URL is empty — notifications are off');
-})();
+/* ---- sign-in through CALIPOKE ADMIN ---- */
+(function boot(){ applyLogo(); $('#buildTag').textContent='v'+BUILD; if(!SLACK_PROXY_URL) console.warn('SLACK_PROXY_URL is empty — notifications are off');
+  CPAuth.init({app:'transfer',header:'#hdrUser',onReady:u=>{ MY_NAME=u.name; MY_ROLE=u.role==='admin'?'admin':(CPAuth.can('prepare','transfer')?'preparer':'staff');
+    $('#meName').textContent=u.name+' · '+u.roleLabel; $('#appHeader').classList.remove('hide'); $('#appMain').classList.remove('hide'); goMenu(); connect(); }}); })();
 </script>
 </body>
 </html>
