@@ -229,6 +229,14 @@ td.num,th.num{text-align:right; font-family:var(--mono)}
 .locrow{display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:14px 16px 0}
 .locrow .lbl{font-family:var(--disp); font-weight:700; font-size:14px; letter-spacing:.02em}
 .locrow .hint{color:var(--muted); font-size:12.5px}
+/* location buttons — nothing chosen by default, so the choice cannot be skipped unnoticed */
+.locbtns{display:flex; gap:8px; flex-wrap:wrap}
+.locbtn{background:var(--bg); border:1.5px solid var(--line); border-radius:11px; color:var(--ink); font:600 14px var(--body); padding:9px 14px; cursor:pointer; white-space:nowrap}
+.locbtn:hover{border-color:var(--accent)} .locbtn.on{background:var(--accent); border-color:var(--accent); color:#06110b}
+.locbtn:disabled{opacity:.35; cursor:not-allowed}
+.locbtns.missing .locbtn:not(.on){border-color:var(--warn)} .locrow .hint.missing{color:var(--warn); font-weight:700}
+.dchk{display:inline-flex; align-items:center; gap:9px; font:700 14px var(--disp); cursor:pointer} .dchk input{width:19px; height:19px; accent-color:var(--warn)}
+.locrow.direct{background:rgba(242,193,95,.07); border-top:1px dashed #4a3d16; border-bottom:1px dashed #4a3d16; padding-bottom:12px; margin-top:12px}
 .recvsess{background:var(--panel); border:1px solid var(--border); border-radius:var(--r); padding:14px 16px; margin-top:10px}
 .recvsess .rh{display:flex; align-items:center; gap:10px; flex-wrap:wrap; cursor:pointer}
 .recvsess .rsup{font-family:var(--disp); font-weight:700; font-size:17px}
@@ -327,8 +335,10 @@ td.num,th.num{text-align:right; font-family:var(--mono)}
       <div class="pill">Lines <b id="nwCount">0</b> · units <b id="nwUnits">0</b></div>
     </div>
     <div class="scanwrap">
-      <div class="locrow"><span class="lbl">Request</span><div class="chipbar" id="nwType" style="margin:0"></div></div>
-      <div class="locrow" id="nwToRow"><span class="lbl">📍 Deliver to</span><select id="nwTo" class="locsel"></select><span class="hint" id="nwToHint">where the products should arrive</span></div>
+      <div class="locrow direct hide" id="nwDirectRow"><label class="dchk"><input type="checkbox" id="nwDirect"> ⚡ Transfer without request</label><span class="hint">admin · the transfer is done at once, no approval — choose from where, where to and what</span></div>
+      <div class="locrow hide" id="nwFromRow"><span class="lbl">📦 From</span><div class="locbtns" id="nwFromBtns"></div><span class="hint" id="nwFromHint">where the products are now</span></div>
+      <div class="locrow" id="nwToRow"><span class="lbl">📍 Deliver to</span><div class="locbtns" id="nwToBtns"></div><input type="hidden" id="nwTo" value=""><span class="hint" id="nwToHint">choose where the products should arrive</span></div>
+      <div class="hide" id="nwType"></div>
       <div class="locrow hide" id="nwNameRow"><span class="lbl" id="nwNameLbl">🎲 Game</span><input id="nwName" class="tinput" style="max-width:360px;font-family:var(--body)" placeholder=""><span class="hint" id="nwNameHint"></span></div>
       <div class="scanhead"><span class="mode items">Add products</span><span class="who">name · barcode · camera</span></div>
       <div class="scanrow">
@@ -398,13 +408,13 @@ const SLACK_PROXY_URL = 'https://script.google.com/macros/s/AKfycbzQjkmHSg9fh-di
 /* sign-in, roles (Approve = Admin · Prepare = Admin / WH Backend / Receiver) and the activity history come from calipoke-auth.js (CALIPOKE ADMIN) */
 function alog(action,d){ try{ if(window.CPAuth) CPAuth.log(action,d); }catch(e){} }
 const LOGO_URL = "https://i.postimg.cc/VkfXDqWf/images.jpg";
-const BUILD = '2026-11-11a · sign-in';
+const BUILD = '2026-11-17a · location buttons · direct transfer';
 /* CPH INVENTORY (stock by location) — Streaming Game / Card Show requests land there */
 const INVENTORY_APP_URL = 'https://cali-poke-house.github.io/cph-inventory/';   // TODO: real GitHub Pages address
 /* request types */
 const RTYPES={transfer:{label:'Transfer',icon:'🚚',prefix:'TR',to:null},game:{label:'Streaming Game',icon:'🎲',prefix:'SG',to:'Stockroom'},show:{label:'Card Show',icon:'🚐',prefix:'CS',to:'Card Show'}};
 const rtype=t=>RTYPES[t&&t.type]?t.type:'transfer';
-function rtag(t){ const r=RTYPES[rtype(t)]; return rtype(t)==='transfer'?'':'<span class="statustag" style="background:#231a3a;color:#A98BF5">'+r.icon+' '+esc(r.label)+(t.gameName?' · '+esc(t.gameName):t.showName?' · '+esc(t.showName):'')+'</span> '; }
+function rtag(t){ const r=RTYPES[rtype(t)]; const dt=t&&t.direct?'<span class="statustag" style="background:#2b2410;color:#f2c15f" title="Done by an admin without a request">⚡ direct'+(t.from?' · from '+esc(t.from):'')+'</span> ':''; return dt+(rtype(t)==='transfer'?'':'<span class="statustag" style="background:#231a3a;color:#A98BF5">'+r.icon+' '+esc(r.label)+(t.gameName?' · '+esc(t.gameName):t.showName?' · '+esc(t.showName):'')+'</span> '); }
 const INV_CACHE_MS = 20*60*1000;
 const STATION_PATH = 'packstation';
 /* ============================================================ */
@@ -618,18 +628,31 @@ $('#rvCsv').onclick=()=>{ const rows=[['Date','Supplier','Status','Item','Variat
 /* ============================================================
    TRANSFER REQUESTS
    ============================================================ */
-const LOCATIONS=['Warehouse','Stockroom','Tiktok 1','Ebay','What Not','Single & Slab'];
-function locOptions(sel, blank){ return (blank?'<option value="">'+blank+'</option>':'')+LOCATIONS.concat(['Card Show']).map(l=>'<option value="'+esc(l)+'"'+(l===sel?' selected':'')+'>'+esc(l)+'</option>').join(''); }
+const LOCATIONS=['Warehouse','Stockroom','Streaming Game Area','Tiktok 1','Ebay','What Not','Single & Slab'];
+const ALL_LOCATIONS=LOCATIONS.concat(['Card Show']);
+function locOptions(sel, blank){ return (blank?'<option value="">'+blank+'</option>':'')+ALL_LOCATIONS.map(l=>'<option value="'+esc(l)+'"'+(l===sel?' selected':'')+'>'+esc(l)+'</option>').join(''); }
 function fromSummary(items){ const f=[...new Set(items.map(i=>i.from||''))]; return f.length===1?f[0]:'mixed'; }
 let cart=[], cartDraftId=null;    // items being composed; draft id when editing a saved draft
 const newId=(type)=>{ const d=new Date(); return (RTYPES[type]||RTYPES.transfer).prefix+'-'+String(d.getFullYear()).slice(2)+pad2(d.getMonth()+1)+pad2(d.getDate())+'-'+Math.random().toString(36).slice(2,6).toUpperCase(); };
 let nwTypeSel='transfer';
-function setNwType(type){ nwTypeSel=RTYPES[type]?type:'transfer'; const r=RTYPES[nwTypeSel];
-  $('#nwType').innerHTML=Object.keys(RTYPES).map(k=>'<button class="chip'+(k===nwTypeSel?' on':'')+'" data-rt="'+k+'">'+RTYPES[k].icon+' '+RTYPES[k].label+'</button>').join(''); $$('#nwType [data-rt]').forEach(b=>b.onclick=()=>setNwType(b.dataset.rt));
-  $('#nwToRow').classList.toggle('hide',nwTypeSel==='game'); $('#nwNameRow').classList.toggle('hide',nwTypeSel==='transfer');
-  if(nwTypeSel==='show'){ $('#nwTo').value='Card Show'; $('#nwTo').disabled=true; $('#nwToHint').textContent='a sub-location for this show is created in CPH INVENTORY'; $('#nwNameLbl').textContent='🚐 Show'; $('#nwName').placeholder='e.g. Frank & Son · 11/15'; $('#nwNameHint').textContent='show name and date'; }
-  else if(nwTypeSel==='game'){ $('#nwTo').disabled=true; $('#nwNameLbl').textContent='🎲 Game'; $('#nwName').placeholder='e.g. Koi Bag Game 11/12 · TT1'; $('#nwNameHint').textContent='goods go to the Stockroom into this game — the list is finished in CPH INVENTORY'; }
-  else { $('#nwTo').disabled=false; if(!$('#nwTo').value||$('#nwTo').value==='Card Show') $('#nwTo').value='Stockroom'; $('#nwToHint').textContent='where the products should arrive'; } }
+let nwFrom='';                    // direct transfer: where the products are taken from
+const isDirect=()=>canReview() && !!($('#nwDirect')&&$('#nwDirect').checked);
+function setNwType(){ nwTypeSel='transfer'; $('#nwNameRow').classList.add('hide'); }
+/* Deliver to / From as buttons. Nothing is chosen until the user clicks one. */
+function renderLocBtns(){
+  const to=$('#nwTo').value||'', direct=isDirect();
+  $('#nwDirectRow').classList.toggle('hide',!canReview()||!!cartDraftId);
+  $('#nwFromRow').classList.toggle('hide',!direct);
+  const btn=(l,on,dis)=>'<button type="button" class="locbtn'+(on?' on':'')+'" data-loc="'+esc(l)+'"'+(dis?' disabled title="Same as the other side"':'')+'>'+esc(l)+'</button>';
+  $('#nwToBtns').innerHTML=ALL_LOCATIONS.map(l=>btn(l,l===to,direct&&l===nwFrom)).join('');
+  $('#nwFromBtns').innerHTML=ALL_LOCATIONS.map(l=>btn(l,l===nwFrom,l===to)).join('');
+  $$('#nwToBtns .locbtn').forEach(b=>b.onclick=()=>{ $('#nwTo').value=($('#nwTo').value===b.dataset.loc)?'':b.dataset.loc; markLoc('To',false); renderLocBtns(); });
+  $$('#nwFromBtns .locbtn').forEach(b=>b.onclick=()=>{ nwFrom=(nwFrom===b.dataset.loc)?'':b.dataset.loc; markLoc('From',false); renderLocBtns(); });
+  $('#nwToHint').textContent=to?'':'choose where the products should arrive'; $('#nwFromHint').textContent=nwFrom?'':'choose where the products are now';
+  $('#nwSend').textContent=direct?'⚡ Transfer now':'📨 Send request'; $('#nwDraft').classList.toggle('hide',direct);
+  $('#nwTitle').textContent=cartDraftId?'✎ Draft '+cartDraftId:(direct?'⚡ Transfer without request':'＋ New request');
+}
+function markLoc(which,on){ $('#nw'+which+'Btns').classList.toggle('missing',on); $('#nw'+which+'Hint').classList.toggle('missing',on); if(on){ $('#nw'+which+'Hint').textContent=which==='To'?'← choose where to deliver':'← choose where the products are now'; $('#nw'+which+'Row').scrollIntoView({block:'center',behavior:'smooth'}); } }
 function normT(raw,id){ if(!raw) return null; const t=Object.assign({id}, raw); t.items=arr(raw.items).map(i=>Object.assign({qty:0}, i)); t.log=arr(raw.log); t.status=t.status||'draft'; return t; }
 function lineOf(v,qty){ return {ikey:v.ikey, name:v.name, variation:varOf(v.variation), barcode:barcodesOf(v.barcode)[0]||'', image:v.image||'', qty:qty, qtyApproved:null, qtyPrepared:null}; }
 function cartAdd(v,qty){ const ex=cart.find(c=>c.ikey===v.ikey); if(ex) ex.qty+=qty; else cart.push(lineOf(v,qty)); renderNew(); }
@@ -704,9 +727,9 @@ $('#rqCsv').onclick=()=>{ const rows=[['Request','Type','Game / Show','Status','
 
 /* ---------- new / draft ---------- */
 function enterNew(draft){
-  if(draft){ cartDraftId=draft.id; cart=draft.items.map(i=>Object.assign({},i)); $('#nwNote').value=draft.note||''; $('#nwTitle').textContent='✎ Draft '+draft.id; $('#nwTo').innerHTML=locOptions(draft.to||'','Choose a location…'); $('#nwName').value=draft.gameName||draft.showName||''; setNwType(rtype(draft)); }
-  else { if(!cartDraftId) $('#nwNote').value=$('#nwNote').value||''; $('#nwTitle').textContent='＋ New request'; if(!$('#nwTo').options.length) $('#nwTo').innerHTML=locOptions('Stockroom','Choose a location…'); if(!cartDraftId) $('#nwName').value=''; setNwType(cartDraftId?nwTypeSel:'transfer'); }
-  $('#nwTo').classList.remove('missing');
+  if(draft){ cartDraftId=draft.id; cart=draft.items.map(i=>Object.assign({},i)); $('#nwNote').value=draft.note||''; $('#nwTo').value=draft.to||''; if($('#nwDirect')) $('#nwDirect').checked=false; nwFrom=''; setNwType(); }
+  else { if(!cartDraftId) $('#nwNote').value=$('#nwNote').value||''; setNwType(); }
+  markLoc('To',false); markLoc('From',false); renderLocBtns();
   show('new'); renderNew(); setTimeout(()=>$('#nwQ').focus(),50);
 }
 function renderNew(){
@@ -736,12 +759,12 @@ $('#nwQ').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(
 $('#nwCam').onclick=()=>openCam('new');
 $('#nwBack').onclick=()=>{ if(cart.length && !cartDraftId && !confirm('Leave without saving? The lines you added will be kept until you reload.')) return; enterReqs(); };
 $('#nwDraft').onclick=()=>saveRequest('draft');
-$('#nwSend').onclick=()=>saveRequest('pending');
+$('#nwSend').onclick=()=>{ if(isDirect()) saveDirect(); else saveRequest('pending'); };
+$('#nwDirect').onchange=()=>{ if(!$('#nwDirect').checked) nwFrom=''; markLoc('From',false); renderLocBtns(); };
 async function saveRequest(status){
   if(!cart.length){ toast('Add at least one product','warn'); return; }
-  const note=$('#nwNote').value.trim(); const type=nwTypeSel; const name=$('#nwName').value.trim(); const to=type==='transfer'?($('#nwTo').value||''):RTYPES[type].to;
-  if(status==='pending' && type!=='transfer' && name.length<2){ $('#nwName').focus(); toast(type==='game'?'Name the game':'Name the show (and its date)','warn'); return; }
-  if(status==='pending' && !to){ $('#nwTo').classList.add('missing'); $('#nwTo').focus(); toast('Choose where the products should be delivered','warn'); return; }
+  const note=$('#nwNote').value.trim(); const ex0=cartDraftId&&TR[cartDraftId]; const type=ex0?rtype(ex0):'transfer'; const name=ex0?(ex0.gameName||ex0.showName||''):''; const to=$('#nwTo').value||(type!=='transfer'?RTYPES[type].to:'');
+  if(status==='pending' && !to){ markLoc('To',true); toast('Choose where the products should be delivered','warn'); return; }
   if(status==='pending' && !note && !confirm('Send without a note? Reviewers will not know where the goods are going.')) return;
   const id=cartDraftId||newId(type); const now=Date.now(); const ex=TR[id];
   const t={ id, type, gameName:type==='game'?name:null, showName:type==='show'?name:null, requester:MY_NAME, createdAt:(ex&&ex.createdAt)||now, updatedAt:now, status, note, to,
@@ -749,9 +772,36 @@ async function saveRequest(status){
     log:((ex&&ex.log)||[]).concat([{at:now, by:MY_NAME, text:status==='pending'?'Request sent for review':'Draft saved'}]),
     submittedAt:status==='pending'?now:null };
   try{ await root.child('transfers/'+id).set(t); }catch(e){ toast('Could not save: '+(e.message||e),'err',4000); return; }
-  cart=[]; cartDraftId=null; $('#nwNote').value=''; $('#nwTo').value='Stockroom'; $('#nwName').value=''; nwTypeSel='transfer';
+  cart=[]; cartDraftId=null; $('#nwNote').value=''; $('#nwTo').value=''; $('#nwName').value=''; nwTypeSel='transfer';
   toast(status==='pending'?'Request '+id+' sent':'Draft saved','ok'); alog(status==='pending'?'transfer_request':'transfer_draft',{text:id+' → '+(to||'')+' · '+t.items.length+' line(s)',ref:id});
   if(status==='pending') notify('new', Object.assign({},t));
+  openReq(id);
+}
+
+/* Admin: a transfer without a request. Nothing to approve or prepare — it is recorded as Ready at once
+   (CPH INVENTORY moves the stock, the station puts goods delivered to the Warehouse on FL-006)
+   and Slack gets one plain message with the result, nobody is tagged. */
+async function saveDirect(){
+  if(!canReview()){ toast('Only an admin can transfer without a request','warn'); return; }
+  if(!cart.length){ toast('Add at least one product','warn'); return; }
+  const to=$('#nwTo').value||'', from=nwFrom, note=$('#nwNote').value.trim();
+  if(!from){ markLoc('From',true); toast('Choose where the products are taken from','warn'); return; }
+  if(!to){ markLoc('To',true); toast('Choose where the products should be delivered','warn'); return; }
+  if(from===to){ toast('From and Deliver to are the same place','warn'); return; }
+  const units=cart.reduce((n,i)=>n+(+i.qty||0),0);
+  if(!confirm('Transfer now, without a request?\n\n'+from+' → '+to+'\n'+cart.length+' line(s) · '+units+' unit(s)\n\nThe stock is moved at once.')) return;
+  const id=newId('transfer'), now=Date.now();
+  const t={ id, type:'transfer', direct:true, gameName:null, showName:null, requester:MY_NAME, createdAt:now, updatedAt:now, submittedAt:now, status:'ready', note, to, from,
+    reviewedBy:MY_NAME, reviewedAt:now, preparedBy:MY_NAME, preparedAt:now,
+    items:cart.map(i=>({ikey:i.ikey,name:i.name,variation:i.variation||'',barcode:i.barcode||'',image:i.image||'',qty:+i.qty||1,qtyApproved:+i.qty||1,qtyPrepared:+i.qty||1,from})),
+    log:[{at:now, by:MY_NAME, text:'Transfer without request · '+from+' → '+to+' · '+units+' unit(s)'}] };
+  $('#nwSend').disabled=true;
+  try{ await root.child('transfers/'+id).set(t); }catch(e){ $('#nwSend').disabled=false; toast('Could not save: '+(e.message||e),'err',4000); return; }
+  $('#nwSend').disabled=false;
+  cart=[]; cartDraftId=null; $('#nwNote').value=''; $('#nwTo').value=''; nwFrom=''; $('#nwDirect').checked=false;
+  toast('Transferred · '+from+' → '+to+' · '+units+' unit(s)','ok',4000); alog('transfer_direct',{text:id+' · '+from+' → '+to+' · '+t.items.length+' line(s) · '+units+' unit(s)',ref:id});
+  const text='⚡ Transfer '+id+' · '+from+' → '+to+' · by '+MY_NAME+' · '+units+' unit(s)\n'+t.items.map(i=>'• '+i.qty+' × '+i.name+(i.variation&&norm(i.variation)!=='default'?' ('+i.variation+')':'')).join('\n')+(note?'\nNote: '+note:'');
+  notify('direct', Object.assign({},t), text);
   openReq(id);
 }
 
