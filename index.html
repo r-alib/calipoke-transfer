@@ -408,7 +408,7 @@ const SLACK_PROXY_URL = 'https://script.google.com/macros/s/AKfycbzQjkmHSg9fh-di
 /* sign-in, roles (Approve = Admin · Prepare = Admin / WH Backend / Receiver) and the activity history come from calipoke-auth.js (CALIPOKE ADMIN) */
 function alog(action,d){ try{ if(window.CPAuth) CPAuth.log(action,d); }catch(e){} }
 const LOGO_URL = "https://i.postimg.cc/VkfXDqWf/images.jpg";
-const BUILD = '2026-11-17b · a finished transfer moves the stock in CPH INVENTORY at once';
+const BUILD = '2026-11-17c · live stock by location';
 /* ============================================================
    CPH INVENTORY — a finished transfer moves the stock at once
    (the same ledger record CPH INVENTORY writes itself; the claim
@@ -579,7 +579,7 @@ function searchProducts(q, f){
   list.sort((a,b)=>String(a.name).localeCompare(String(b.name)) || String(a.variation).localeCompare(String(b.variation)));
   return list;
 }
-function stockChip(v, big){ const s=v.stock; if(s==null) return ''; const cls=s<=0?'zero':(s<5?'low':''); return '<span class="pkstock '+(big?'big ':'')+cls+'">'+(big?'📦 ':'stock ')+fmtN(s)+'</span>'; }
+function stockChip(v, big){ const s=stockOf(v.ikey); if(s==null) return ''; const cls=s<=0?'zero':(s<5?'low':''); const br=stockSplit(v.ikey); return '<span class="pkstock '+(big?'big ':'')+cls+'" title="'+esc(STOCK_TIP)+'">'+(big?'📦 ':'stock ')+fmtN(s)+(br?' <small style="font-weight:500;font-size:12.5px;color:var(--muted)">'+esc(br)+'</small>':'')+'</span>'; }
 
 /* ---------- STOCK screen ---------- */
 let stF={type:'',brand:'',series:''};
@@ -697,12 +697,51 @@ function markLoc(which,on){ $('#nw'+which+'Btns').classList.toggle('missing',on)
 function normT(raw,id){ if(!raw) return null; const t=Object.assign({id}, raw); t.items=arr(raw.items).map(i=>Object.assign({qty:0}, i)); t.log=arr(raw.log); t.status=t.status||'draft'; return t; }
 function lineOf(v,qty){ return {ikey:v.ikey, name:v.name, variation:varOf(v.variation), barcode:barcodesOf(v.barcode)[0]||'', image:v.image||'', qty:qty, qtyApproved:null, qtyPrepared:null}; }
 function cartAdd(v,qty){ const ex=cart.find(c=>c.ikey===v.ikey); if(ex) ex.qty+=qty; else cart.push(lineOf(v,qty)); renderNew(); }
-function stockOf(ikey){ const v=INV[ikey]; return v&&v.stock!=null ? v.stock : null; }
+/* ============================================================
+   LIVE STOCK — what is really on hand right now, by location
+   WH    = the warehouse inventory count of the Pack Station
+   rooms = CPH INVENTORY balances (+ open games / shows in the room)
+   The stock column of the inventory sheet is only a fallback while
+   the live figures are still loading.
+   ============================================================ */
+const ROOM_TAGS=[['stockroom','SR','Stockroom'],['tiktok1','TT1','TikTok 1'],['ebay','EB','Ebay'],['whatnot','WN','WhatNot'],['singleslab','S&S','Single & Slab'],['gamearea','SG','Streaming Game Area'],['cardshow','CS','Card Show']];
+const STOCK_TIP='Live · WH warehouse count · '+ROOM_TAGS.map(r=>r[1]+' '+r[2]).join(' · ');
+let LS_BASE=null, LS_CNT=null, LS_BAL=null, LS_SUBS=null, WHQ=null, ROOMQ=null, lsT=null;
+function liveRebuild(){
+  if(LS_CNT){ const items=(LS_BASE&&LS_BASE.items&&!Array.isArray(LS_BASE.items))?LS_BASE.items:{}; const m=new Map();
+    for(const L in LS_CNT){ if(String(L).toUpperCase()==='STORE') continue; const c=LS_CNT[L]||{};
+      for(const k in c){ const v=c[k]; if(!v||typeof v!=='object') continue; const b=items[k]||{}, q=b.q>0?+b.q:1; const u=(+v.s||0)*q+(+v.b||0)+(+v.c||0)+(+v.d||0);
+        m.set(k,(m.get(k)||0)+u); const ck=clean(v.n||b.n||''); if(ck&&ck!==k) m.set(ck,(m.get(ck)||0)+u); } }
+    WHQ=m; }
+  if(LS_BAL){ const m=new Map(); const add=(loc,k,q)=>{ q=+q||0; if(!q) return; let o=m.get(k); if(!o){ o={}; m.set(k,o); } o[loc]=(o[loc]||0)+q; };
+    for(const loc in LS_BAL){ const b=LS_BAL[loc]||{}; for(const k in b) add(loc,k,b[k]); }
+    for(const id in (LS_SUBS||{})){ const sb=LS_SUBS[id]; if(!sb||sb.status==='closed'||!sb.at) continue; for(const k in (sb.items||{})) add(sb.at,k,sb.items[k]); }
+    ROOMQ=m; }
+  /* show the new figures, but never redraw the page under somebody who is typing */
+  clearTimeout(lsT); lsT=setTimeout(()=>{ const a=document.activeElement; if(a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return; if(_modal) return; if(['stock','new','req'].includes(curScreen)) renderCurrent(); },500);
+}
+function liveWatch(){
+  root.child('stockCount/base').on('value',sn=>{ LS_BASE=sn.val()||{}; liveRebuild(); },()=>{});
+  root.child('stockCount/counts').on('value',sn=>{ LS_CNT=sn.val()||{}; liveRebuild(); },()=>{});
+  const R=invRoot(); if(!R) return;
+  R.child('balances').on('value',sn=>{ LS_BAL=sn.val()||{}; liveRebuild(); },()=>{});
+  R.child('subs').on('value',sn=>{ LS_SUBS=sn.val()||{}; liveRebuild(); },()=>{});
+}
+/* {wh, rooms:[[tag,units]], tot} — null while the live figures are not read yet */
+function liveStock(ikey){
+  if(!WHQ||!ROOMQ) return null; const v=INV[ikey]; const nm=v?v.name:String(ikey).split('||')[0], va=v?varOf(v.variation):'';
+  let wh=null; for(const t of [clean(nm), va?clean(nm+va):'']){ if(t&&WHQ.has(t)){ wh=WHQ.get(t); break; } }
+  const o=ROOMQ.get(invKey(ikey))||{}; const rooms=ROOM_TAGS.filter(r=>o[r[0]]).map(r=>[r[1],o[r[0]]]);
+  return {wh, rooms, tot:(wh||0)+rooms.reduce((n,r)=>n+r[1],0)};
+}
+/* "WH 12 · SR 3 · TT1 2" — only the places that have the product */
+function stockSplit(ikey){ const q=liveStock(ikey); if(!q) return ''; const a=[]; if(q.wh) a.push('WH '+fmtN(q.wh)); q.rooms.forEach(r=>a.push(r[0]+' '+fmtN(r[1]))); return a.join(' · '); }
+function stockOf(ikey){ const q=liveStock(ikey); if(q) return q.tot; const v=INV[ikey]; return v&&v.stock!=null ? v.stock : null; }
 
 function openQty(v, done, initial, title){
   const s=stockOf(v.ikey);
   const d=modal('<h2>'+esc(title||'How many?')+'</h2>'+
-    '<div class="rccard">'+img(v.image,v.name)+'<div><div class="cn">'+esc(v.name)+'</div>'+(varOf(v.variation)?'<div class="cv">'+esc(v.variation)+'</div>':'')+(s!=null?'<div class="cv">In stock: <b class="mono" style="color:var(--ink)">'+fmtN(s)+'</b></div>':'')+'</div></div>'+
+    '<div class="rccard">'+img(v.image,v.name)+'<div><div class="cn">'+esc(v.name)+'</div>'+(varOf(v.variation)?'<div class="cv">'+esc(v.variation)+'</div>':'')+(s!=null?'<div class="cv">In stock: <b class="mono" style="color:var(--ink)">'+fmtN(s)+'</b>'+(stockSplit(v.ikey)?' · '+esc(stockSplit(v.ikey)):'')+'</div>':'')+'</div></div>'+
     '<input id="qQty" class="rcbigqty" type="number" inputmode="numeric" min="1" step="1" value="'+(initial||1)+'">'+
     '<div class="srcrow" style="margin-top:8px"><button class="btn" data-q="-1">−1</button><button class="btn" data-q="1">+1</button><button class="btn" data-q="6">+6</button><button class="btn" data-q="12">+12</button><button class="btn" data-q="24">+24</button></div>'+
     '<div class="rcnote hide" id="qWarn"></div>'+
@@ -719,7 +758,7 @@ function openQty(v, done, initial, title){
 function openPicker(done){
   const d=modal('<h2>Add a product</h2><div class="srcrow" style="margin-top:10px"><input id="pkQ" class="tinput" placeholder="Name or barcode…" autocomplete="off"><button class="btn" id="pkCam">📷</button></div><div class="rclist" id="pkList"></div><button class="btn ghost" id="pkCancel" style="width:100%;margin-top:12px">Cancel</button>');
   const inp=d.querySelector('#pkQ'), list=d.querySelector('#pkList');
-  const draw=()=>{ const rows=searchProducts(inp.value).slice(0,80); list.innerHTML=rows.length?rows.map((v,i)=>'<button class="rcpick" data-i="'+i+'">'+img(v.image,v.name)+'<div><div class="pn">'+esc(v.name)+'</div><div class="pv">'+esc(varOf(v.variation))+(v.stock!=null?' · stock '+fmtN(v.stock):'')+'</div></div></button>').join(''):'<div class="empty" style="padding:18px">Nothing found</div>';
+  const draw=()=>{ const rows=searchProducts(inp.value).slice(0,80); list.innerHTML=rows.length?rows.map((v,i)=>'<button class="rcpick" data-i="'+i+'">'+img(v.image,v.name)+'<div><div class="pn">'+esc(v.name)+'</div><div class="pv">'+esc(varOf(v.variation))+(stockOf(v.ikey)!=null?' · stock '+fmtN(stockOf(v.ikey))+(stockSplit(v.ikey)?' ('+esc(stockSplit(v.ikey))+')':''):'')+'</div></div></button>').join(''):'<div class="empty" style="padding:18px">Nothing found</div>';
     list.querySelectorAll('.rcpick').forEach(b=>b.onclick=()=>{ const v=rows[+b.dataset.i]; openQty(v, done); }); };
   inp.addEventListener('input',draw); draw(); setTimeout(()=>inp.focus(),50);
   d.querySelector('#pkCancel').onclick=closeModal;
@@ -779,7 +818,7 @@ function renderNew(){
   if(!cart.length) c.innerHTML='<div class="empty">No products yet — search above and tap a result.</div>';
   else c.innerHTML='<div class="rcitems">'+cart.map((i,idx)=>{ const s=stockOf(i.ikey); const over=s!=null&&i.qty>s;
     return '<div class="rcitem'+(over?' warnline':'')+'">'+img(i.image,i.name,'zoom')+'<div><div class="rin">'+esc(i.name)+'</div>'+(i.variation?'<div class="riv">'+esc(i.variation)+'</div>':'')+
-      '<div class="rchips">'+(s!=null?'<span class="pkstock '+(over?'low':'')+'">stock '+fmtN(s)+(over?' · ⚠ asking more':'')+'</span>':'')+'</div></div>'+
+      '<div class="rchips">'+(s!=null?'<span class="pkstock '+(over?'low':'')+'" title="'+esc(STOCK_TIP)+'">stock '+fmtN(s)+(stockSplit(i.ikey)?' · '+esc(stockSplit(i.ikey)):'')+(over?' · ⚠ asking more':'')+'</span>':'')+'</div></div>'+
       '<div class="rcqty"><button class="step" data-dec="'+idx+'">−</button><input type="number" min="1" data-qty="'+idx+'" value="'+i.qty+'"><button class="step" data-inc="'+idx+'">+</button><button class="rcdel" data-del="'+idx+'">✕</button></div></div>'; }).join('')+'</div>';
   $$('#nwCart [data-inc]').forEach(b=>b.onclick=()=>{ cart[+b.dataset.inc].qty++; renderNew(); });
   $$('#nwCart [data-dec]').forEach(b=>b.onclick=()=>{ const i=cart[+b.dataset.dec]; i.qty=Math.max(1,i.qty-1); renderNew(); });
@@ -792,7 +831,7 @@ function renderHits(){
   if(!q){ box.innerHTML=''; return; }
   const rows=searchProducts(q).slice(0,40);
   if(rows.length===1 && barcodesOf(rows[0].barcode).includes(norm(q))){ box.innerHTML=''; $('#nwQ').value=''; openQty(rows[0], (v,n)=>{ cartAdd(v,n); $('#nwQ').focus(); }); return; }
-  box.innerHTML=rows.length?'<div class="rclist" style="max-height:40vh">'+rows.map((v,i)=>'<button class="rcpick" data-i="'+i+'">'+img(v.image,v.name)+'<div><div class="pn">'+esc(v.name)+'</div><div class="pv">'+esc(varOf(v.variation))+(v.stock!=null?' · stock '+fmtN(v.stock):'')+'</div></div></button>').join('')+'</div>':'<div class="empty" style="padding:14px">Nothing found for “'+esc(q)+'”</div>';
+  box.innerHTML=rows.length?'<div class="rclist" style="max-height:40vh">'+rows.map((v,i)=>'<button class="rcpick" data-i="'+i+'">'+img(v.image,v.name)+'<div><div class="pn">'+esc(v.name)+'</div><div class="pv">'+esc(varOf(v.variation))+(stockOf(v.ikey)!=null?' · stock '+fmtN(stockOf(v.ikey))+(stockSplit(v.ikey)?' ('+esc(stockSplit(v.ikey))+')':''):'')+'</div></div></button>').join('')+'</div>':'<div class="empty" style="padding:14px">Nothing found for “'+esc(q)+'”</div>';
   box.querySelectorAll('.rcpick').forEach(b=>b.onclick=()=>{ const v=rows[+b.dataset.i]; $('#nwQ').value=''; box.innerHTML=''; openQty(v,(it,n)=>{ cartAdd(it,n); $('#nwQ').focus(); }); });
 }
 $('#nwQ').addEventListener('input',renderHits);
@@ -881,7 +920,7 @@ function renderReq(){
   t.items.forEach((i,idx)=>{ const s=stockOf(i.ikey); const over=s!=null&&(+i.qty)>s;
     const cell=(field,on,val,ref)=>on?'<td class="num qtycell"><input type="number" min="0" data-f="'+field+'" data-i="'+idx+'" value="'+val+'"'+(ref!=null&&val!==ref?' class="diff"':'')+'></td>':'<td class="num'+(ref!=null&&val!==ref?' hl':'')+'">'+(val==null?'—':val)+'</td>';
     h+='<tr><td>'+img(i.image,i.name,'zoom')+'</td><td><b>'+esc(i.name)+'</b>'+(i.variation?'<br><span class="sub" style="font-size:12.5px">'+esc(i.variation)+'</span>':'')+(i.barcode?'<br><span class="mono" style="font-size:11px;color:var(--faint)">'+esc(i.barcode)+'</span>':'')+'</td>'+
-      '<td class="num" style="color:'+(over?'var(--warn)':'var(--muted)')+'">'+(s==null?'—':fmtN(s))+(over?' ⚠':'')+'</td>'+
+      '<td class="num" style="color:'+(over?'var(--warn)':'var(--muted)')+'">'+(s==null?'—':fmtN(s))+(over?' ⚠':'')+(stockSplit(i.ikey)?'<br><span style="font-size:11.5px;color:var(--muted);white-space:nowrap">'+esc(stockSplit(i.ikey))+'</span>':'')+'</td>'+
       cell('qty',editQty,i.qty)+(showApp?cell('qtyApproved',editApp,i.qtyApproved??i.qty,i.qty):'')+(showPrep?cell('qtyPrepared',editPrep,i.qtyPrepared??(i.qtyApproved??i.qty),i.qtyApproved??i.qty):'')+
       (showFrom?'<td>'+(editPrep?'<select class="locsel sm'+(i.from?'':' missing')+'" data-from="'+idx+'">'+locOptions(i.from||'','Choose…')+'</select>':esc(i.from||'—'))+'</td>':'')+
       '<td>'+(canEditLines(t)?'<button class="rcdel" data-rm="'+idx+'">✕</button>':'')+'</td></tr>'; });
@@ -1022,6 +1061,7 @@ function connect(){
   root.child('presence/tr_'+Math.random().toString(36).slice(2,8)).set({name:MY_NAME, app:'transfer', at:Date.now()}).catch(()=>{});
   root.child('receiving/sessions').on('value',snap=>{ RC=[]; snap.forEach(c=>{ const s=normSession(c.val()); if(s) RC.push(s); }); RC.sort((a,b)=>(b.startedAt||0)-(a.startedAt||0)); if(curScreen==='recv') renderRecv(); });
   let first=true;
+  liveWatch();
   root.child('transfers').on('value',snap=>{ TR={}; snap.forEach(c=>{ const t=normT(c.val(),c.key); if(t) TR[t.id]=t; }); renderCurrent(); invSweep(); if(first){ first=false; handleHash(); } });
   loadInventory(false);
 }
