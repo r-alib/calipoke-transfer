@@ -408,7 +408,48 @@ const SLACK_PROXY_URL = 'https://script.google.com/macros/s/AKfycbzQjkmHSg9fh-di
 /* sign-in, roles (Approve = Admin · Prepare = Admin / WH Backend / Receiver) and the activity history come from calipoke-auth.js (CALIPOKE ADMIN) */
 function alog(action,d){ try{ if(window.CPAuth) CPAuth.log(action,d); }catch(e){} }
 const LOGO_URL = "https://i.postimg.cc/VkfXDqWf/images.jpg";
-const BUILD = '2026-11-17a · location buttons · direct transfer';
+const BUILD = '2026-11-17b · a finished transfer moves the stock in CPH INVENTORY at once';
+/* ============================================================
+   CPH INVENTORY — a finished transfer moves the stock at once
+   (the same ledger record CPH INVENTORY writes itself; the claim
+   in inv/ingest/transfers makes sure it is posted only once)
+   ============================================================ */
+const INV_CONFIG={apiKey:"AIzaSyAsTYwU0qABmXKuYSpyendwHw3djJc-Bqo",authDomain:"calipoke-inventory.firebaseapp.com",databaseURL:"https://calipoke-inventory-default-rtdb.firebaseio.com",projectId:"calipoke-inventory",storageBucket:"calipoke-inventory.firebasestorage.app",messagingSenderId:"156640764541",appId:"1:156640764541:web:833f96e4b0849b53454714"};
+const INV_LOC={'warehouse':'warehouse','stockroom':'stockroom','tiktok 1':'tiktok1','ebay':'ebay','what not':'whatnot','whatnot':'whatnot','single & slab':'singleslab','slab & single':'singleslab','streaming game area':'gamearea','game area':'gamearea','card show':'cardshow'};
+const INV_SWEEP_MS=14*24*3600*1000;
+const invKey=k=>String(k).replace(/[.#$\/\[\]]/g,'_');
+const invDay=ts=>{ const d=new Date(ts), p=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); };
+let IR=null; const invDone=new Set(), invBusy=new Set();
+function invRoot(){ if(IR) return IR; try{ const a=(firebase.apps||[]).find(x=>x.name==='cphinv')||firebase.initializeApp(INV_CONFIG,'cphinv'); IR=firebase.database(a).ref('inv'); }catch(e){ console.warn('inventory db',e); } return IR; }
+async function invBump(loc,k,delta){ if(!loc||loc==='warehouse'||!delta) return; await IR.child('balances/'+loc+'/'+invKey(k)).transaction(c=>{ const v=(+c||0)+delta; return v===0?null:v; }); }
+/* returns the number of lines posted, 0 when somebody already posted it, -1 on an error */
+async function postToInventory(t){
+  if(!t||!t.id||String(t.status||'').toLowerCase()!=='ready'||!t.to) return 0;
+  if((t.type==='game'&&t.gameName)||(t.type==='show'&&t.showName)) return 0;      // old game / show requests: CPH INVENTORY puts them into their own sub-location
+  const to=INV_LOC[norm(t.to)]; if(!to) return 0;
+  if(invDone.has(t.id)||invBusy.has(t.id)) return 0; const R=invRoot(); if(!R) return -1;
+  invBusy.add(t.id);
+  try{
+    const ts=+t.preparedAt||Date.now();
+    const claim=await R.child('ingest/transfers/'+invKey(t.id)).transaction(c=>c?undefined:{at:Date.now(),by:MY_NAME||'transfer',ts,src:'transfer-app'});
+    if(!claim.committed){ invDone.add(t.id); return 0; }
+    const items=Array.isArray(t.items)?t.items:Object.values(t.items||{}); let n=0;
+    for(let i=0;i<items.length;i++){ const ln=items[i]||{}; const qty=+(ln.qtyPrepared!=null?ln.qtyPrepared:(ln.qtyApproved!=null?ln.qtyApproved:ln.qty))||0; if(!qty) continue;
+      const from=INV_LOC[norm(ln.from||t.from)]||null; if(from===to) continue;
+      const item=ln.ikey||keyOf(ln.name,ln.variation||'');
+      const rec={ts, day:invDay(ts), item, name:ln.name+(varOf(ln.variation)?' · '+ln.variation:''), qty, from, to, kind:'transfer', by:t.preparedBy||MY_NAME||'transfer', note:t.note||'', src:'transfer-app', srcId:t.id, at:Date.now()};
+      Object.keys(rec).forEach(x=>{ if(rec[x]==null||rec[x]==='') delete rec[x]; });
+      const r=await R.child('ledger/tr_'+invKey(t.id)+'_'+i).transaction(c=>c?undefined:rec); if(!r.committed) continue;
+      if(from) await invBump(from,item,-qty);
+      await invBump(to,item,+qty); n++; }
+    invDone.add(t.id); return n;
+  }catch(e){ console.warn('inventory post',e); return -1; }
+  finally{ invBusy.delete(t.id); }
+}
+/* safety net: anything that became ready while the page that did it was closed too early */
+let invSweepT=null;
+function invSweep(){ clearTimeout(invSweepT); invSweepT=setTimeout(async()=>{ const since=Date.now()-INV_SWEEP_MS;
+  for(const id in TR){ const t=TR[id]; if(!t||t.status!=='ready'||invDone.has(id)||(+t.preparedAt||0)<since) continue; const n=await postToInventory(t); if(n<0) break; } },1500); }
 /* CPH INVENTORY (stock by location) — Streaming Game / Card Show requests land there */
 const INVENTORY_APP_URL = 'https://cali-poke-house.github.io/cph-inventory/';   // TODO: real GitHub Pages address
 /* request types */
@@ -802,6 +843,7 @@ async function saveDirect(){
   toast('Transferred · '+from+' → '+to+' · '+units+' unit(s)','ok',4000); alog('transfer_direct',{text:id+' · '+from+' → '+to+' · '+t.items.length+' line(s) · '+units+' unit(s)',ref:id});
   const text='⚡ Transfer '+id+' · '+from+' → '+to+' · by '+MY_NAME+' · '+units+' unit(s)\n'+t.items.map(i=>'• '+i.qty+' × '+i.name+(i.variation&&norm(i.variation)!=='default'?' ('+i.variation+')':'')).join('\n')+(note?'\nNote: '+note:'');
   notify('direct', Object.assign({},t), text);
+  postToInventory(t).then(n=>{ if(n>0) toast('CPH INVENTORY updated · '+n+' line(s) moved','ok',3000); else if(n<0) toast('CPH INVENTORY was not updated — it will be retried','warn',4500); });
   openReq(id);
 }
 
@@ -880,7 +922,7 @@ function renderReq(){
   on('aReady',()=>{ const items=t.items.map(x=>Object.assign({},x,{qtyPrepared:x.qtyPrepared??(x.qtyApproved??x.qty)})); const short=items.filter(x=>x.qtyPrepared<(x.qtyApproved??x.qty));
     const noFrom=items.filter(x=>x.qtyPrepared>0&&!x.from); if(noFrom.length){ toast('Choose where each line is taken from ('+noFrom.length+' missing)','warn',3500); const e=$('#dtBody [data-from]'); if(e) e.focus(); return; }
     if(!confirm('Mark as ready for transfer?\n'+items.reduce((n,x)=>n+x.qtyPrepared,0)+' units prepared'+(short.length?'\n'+short.length+' line(s) short: '+short.map(x=>x.name+' '+x.qtyPrepared+'/'+(x.qtyApproved??x.qty)).join(', '):''))) return;
-    patch(t,{items,status:'ready',preparedBy:MY_NAME,preparedAt:Date.now()},'Ready for transfer · '+items.reduce((n,x)=>n+x.qtyPrepared,0)+' units'+(short.length?' ('+short.length+' short)':'')).then(()=>notify('ready',TR[t.id]||t)); });
+    patch(t,{items,status:'ready',preparedBy:MY_NAME,preparedAt:Date.now()},'Ready for transfer · '+items.reduce((n,x)=>n+x.qtyPrepared,0)+' units'+(short.length?' ('+short.length+' short)':'')).then(async()=>{ const tt=Object.assign({},TR[t.id]||t,{items,status:'ready'}); if(!tt.preparedAt) tt.preparedAt=Date.now(); notify('ready',TR[t.id]||t); const n=await postToInventory(tt); if(n>0) toast('CPH INVENTORY updated · '+n+' line(s) moved','ok',3000); else if(n<0) toast('CPH INVENTORY was not updated — it will be retried','warn',4500); }); });
   on('aDelete',async()=>{ if(!confirm('Delete '+t.id+' permanently?')) return; await root.child('transfers/'+t.id).remove(); toast('Deleted','ok'); enterReqs(); });
 }
 async function patch(t, fields, logText){
@@ -980,7 +1022,7 @@ function connect(){
   root.child('presence/tr_'+Math.random().toString(36).slice(2,8)).set({name:MY_NAME, app:'transfer', at:Date.now()}).catch(()=>{});
   root.child('receiving/sessions').on('value',snap=>{ RC=[]; snap.forEach(c=>{ const s=normSession(c.val()); if(s) RC.push(s); }); RC.sort((a,b)=>(b.startedAt||0)-(a.startedAt||0)); if(curScreen==='recv') renderRecv(); });
   let first=true;
-  root.child('transfers').on('value',snap=>{ TR={}; snap.forEach(c=>{ const t=normT(c.val(),c.key); if(t) TR[t.id]=t; }); renderCurrent(); if(first){ first=false; handleHash(); } });
+  root.child('transfers').on('value',snap=>{ TR={}; snap.forEach(c=>{ const t=normT(c.val(),c.key); if(t) TR[t.id]=t; }); renderCurrent(); invSweep(); if(first){ first=false; handleHash(); } });
   loadInventory(false);
 }
 /* ---- sign-in through CALIPOKE ADMIN ---- */
