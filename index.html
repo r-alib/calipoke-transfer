@@ -336,7 +336,7 @@ td.num,th.num{text-align:right; font-family:var(--mono)}
     </div>
     <div class="scanwrap">
       <div class="locrow direct hide" id="nwDirectRow"><label class="dchk"><input type="checkbox" id="nwDirect"> ⚡ Transfer without request</label><span class="hint">admin · the transfer is done at once, no approval — choose from where, where to and what</span></div>
-      <div class="locrow hide" id="nwFromRow"><span class="lbl">📦 From</span><div class="locbtns" id="nwFromBtns"></div><span class="hint" id="nwFromHint">where the products are now</span></div>
+      <div class="locrow" id="nwFromRow"><span class="lbl">📦 From</span><div class="locbtns" id="nwFromBtns"></div><span class="hint" id="nwFromHint">where the products are now</span></div>
       <div class="locrow" id="nwToRow"><span class="lbl">📍 Deliver to</span><div class="locbtns" id="nwToBtns"></div><input type="hidden" id="nwTo" value=""><span class="hint" id="nwToHint">choose where the products should arrive</span></div>
       <div class="hide" id="nwType"></div>
       <div class="locrow hide" id="nwNameRow"><span class="lbl" id="nwNameLbl">🎲 Game</span><input id="nwName" class="tinput" style="max-width:360px;font-family:var(--body)" placeholder=""><span class="hint" id="nwNameHint"></span></div>
@@ -408,7 +408,7 @@ const SLACK_PROXY_URL = 'https://script.google.com/macros/s/AKfycbzQjkmHSg9fh-di
 /* sign-in, roles (Approve = Admin · Prepare = Admin / WH Backend / Receiver) and the activity history come from calipoke-auth.js (CALIPOKE ADMIN) */
 function alog(action,d){ try{ if(window.CPAuth) CPAuth.log(action,d); }catch(e){} }
 const LOGO_URL = "https://i.postimg.cc/VkfXDqWf/images.jpg";
-const BUILD = '2026-11-17c · live stock by location';
+const BUILD = '2026-11-18a · Deliver to / Taken from can be changed at every step';
 /* ============================================================
    CPH INVENTORY — a finished transfer moves the stock at once
    (the same ledger record CPH INVENTORY writes itself; the claim
@@ -676,6 +676,7 @@ function fromSummary(items){ const f=[...new Set(items.map(i=>i.from||''))]; ret
 let cart=[], cartDraftId=null;    // items being composed; draft id when editing a saved draft
 const newId=(type)=>{ const d=new Date(); return (RTYPES[type]||RTYPES.transfer).prefix+'-'+String(d.getFullYear()).slice(2)+pad2(d.getMonth()+1)+pad2(d.getDate())+'-'+Math.random().toString(36).slice(2,6).toUpperCase(); };
 let nwTypeSel='transfer';
+let nwFromInit='';                // the From a saved draft was opened with (so it can be cleared again)
 let nwFrom='';                    // direct transfer: where the products are taken from
 const isDirect=()=>canReview() && !!($('#nwDirect')&&$('#nwDirect').checked);
 function setNwType(){ nwTypeSel='transfer'; $('#nwNameRow').classList.add('hide'); }
@@ -683,13 +684,12 @@ function setNwType(){ nwTypeSel='transfer'; $('#nwNameRow').classList.add('hide'
 function renderLocBtns(){
   const to=$('#nwTo').value||'', direct=isDirect();
   $('#nwDirectRow').classList.toggle('hide',!canReview()||!!cartDraftId);
-  $('#nwFromRow').classList.toggle('hide',!direct);
   const btn=(l,on,dis)=>'<button type="button" class="locbtn'+(on?' on':'')+'" data-loc="'+esc(l)+'"'+(dis?' disabled title="Same as the other side"':'')+'>'+esc(l)+'</button>';
-  $('#nwToBtns').innerHTML=ALL_LOCATIONS.map(l=>btn(l,l===to,direct&&l===nwFrom)).join('');
+  $('#nwToBtns').innerHTML=ALL_LOCATIONS.map(l=>btn(l,l===to,l===nwFrom)).join('');
   $('#nwFromBtns').innerHTML=ALL_LOCATIONS.map(l=>btn(l,l===nwFrom,l===to)).join('');
   $$('#nwToBtns .locbtn').forEach(b=>b.onclick=()=>{ $('#nwTo').value=($('#nwTo').value===b.dataset.loc)?'':b.dataset.loc; markLoc('To',false); renderLocBtns(); });
   $$('#nwFromBtns .locbtn').forEach(b=>b.onclick=()=>{ nwFrom=(nwFrom===b.dataset.loc)?'':b.dataset.loc; markLoc('From',false); renderLocBtns(); });
-  $('#nwToHint').textContent=to?'':'choose where the products should arrive'; $('#nwFromHint').textContent=nwFrom?'':'choose where the products are now';
+  $('#nwToHint').textContent=to?'':'choose where the products should arrive'; $('#nwFromHint').textContent=nwFrom?'':(direct?'choose where the products are now':'optional — where to take them from (can be set or changed later)');
   $('#nwSend').textContent=direct?'⚡ Transfer now':'📨 Send request'; $('#nwDraft').classList.toggle('hide',direct);
   $('#nwTitle').textContent=cartDraftId?'✎ Draft '+cartDraftId:(direct?'⚡ Transfer without request':'＋ New request');
 }
@@ -807,7 +807,7 @@ $('#rqCsv').onclick=()=>{ const rows=[['Request','Type','Game / Show','Status','
 
 /* ---------- new / draft ---------- */
 function enterNew(draft){
-  if(draft){ cartDraftId=draft.id; cart=draft.items.map(i=>Object.assign({},i)); $('#nwNote').value=draft.note||''; $('#nwTo').value=draft.to||''; if($('#nwDirect')) $('#nwDirect').checked=false; nwFrom=''; setNwType(); }
+  if(draft){ cartDraftId=draft.id; cart=draft.items.map(i=>Object.assign({},i)); $('#nwNote').value=draft.note||''; $('#nwTo').value=draft.to||''; if($('#nwDirect')) $('#nwDirect').checked=false; { const f=fromSummary(draft.items); nwFrom=(f&&f!=='mixed')?f:''; nwFromInit=nwFrom; } setNwType(); }
   else { if(!cartDraftId) $('#nwNote').value=$('#nwNote').value||''; setNwType(); }
   markLoc('To',false); markLoc('From',false); renderLocBtns();
   show('new'); renderNew(); setTimeout(()=>$('#nwQ').focus(),50);
@@ -840,19 +840,20 @@ $('#nwCam').onclick=()=>openCam('new');
 $('#nwBack').onclick=()=>{ if(cart.length && !cartDraftId && !confirm('Leave without saving? The lines you added will be kept until you reload.')) return; enterReqs(); };
 $('#nwDraft').onclick=()=>saveRequest('draft');
 $('#nwSend').onclick=()=>{ if(isDirect()) saveDirect(); else saveRequest('pending'); };
-$('#nwDirect').onchange=()=>{ if(!$('#nwDirect').checked) nwFrom=''; markLoc('From',false); renderLocBtns(); };
+$('#nwDirect').onchange=()=>{ markLoc('From',false); renderLocBtns(); };
 async function saveRequest(status){
   if(!cart.length){ toast('Add at least one product','warn'); return; }
   const note=$('#nwNote').value.trim(); const ex0=cartDraftId&&TR[cartDraftId]; const type=ex0?rtype(ex0):'transfer'; const name=ex0?(ex0.gameName||ex0.showName||''):''; const to=$('#nwTo').value||(type!=='transfer'?RTYPES[type].to:'');
   if(status==='pending' && !to){ markLoc('To',true); toast('Choose where the products should be delivered','warn'); return; }
+  if(nwFrom && nwFrom===to){ toast('From and Deliver to are the same place','warn'); return; }
   if(status==='pending' && !note && !confirm('Send without a note? Reviewers will not know where the goods are going.')) return;
   const id=cartDraftId||newId(type); const now=Date.now(); const ex=TR[id];
   const t={ id, type, gameName:type==='game'?name:null, showName:type==='show'?name:null, requester:MY_NAME, createdAt:(ex&&ex.createdAt)||now, updatedAt:now, status, note, to,
-    items:cart.map(i=>({ikey:i.ikey,name:i.name,variation:i.variation||'',barcode:i.barcode||'',image:i.image||'',qty:+i.qty||1,qtyApproved:null,qtyPrepared:null,from:i.from||''})),
+    items:cart.map(i=>({ikey:i.ikey,name:i.name,variation:i.variation||'',barcode:i.barcode||'',image:i.image||'',qty:+i.qty||1,qtyApproved:null,qtyPrepared:null,from:nwFrom||(nwFromInit?'':(i.from||''))})),
     log:((ex&&ex.log)||[]).concat([{at:now, by:MY_NAME, text:status==='pending'?'Request sent for review':'Draft saved'}]),
     submittedAt:status==='pending'?now:null };
   try{ await root.child('transfers/'+id).set(t); }catch(e){ toast('Could not save: '+(e.message||e),'err',4000); return; }
-  cart=[]; cartDraftId=null; $('#nwNote').value=''; $('#nwTo').value=''; $('#nwName').value=''; nwTypeSel='transfer';
+  cart=[]; cartDraftId=null; $('#nwNote').value=''; $('#nwTo').value=''; $('#nwName').value=''; nwTypeSel='transfer'; nwFrom=''; nwFromInit='';
   toast(status==='pending'?'Request '+id+' sent':'Draft saved','ok'); alog(status==='pending'?'transfer_request':'transfer_draft',{text:id+' → '+(to||'')+' · '+t.items.length+' line(s)',ref:id});
   if(status==='pending') notify('new', Object.assign({},t));
   openReq(id);
@@ -901,15 +902,18 @@ function renderReq(){
   const editPrep= st==='approved' && prep;                             // prepared qty
   const showApp = ['approved','ready'].includes(st) || editApp;
   const showPrep= st==='ready' || editPrep;
-  const showFrom= showPrep;                                            // source location column
-  const fromAll = showFrom ? fromSummary(t.items) : '';
+  /* Deliver to / Taken from can be changed at every step until the transfer is marked ready
+     (after that the stock has already moved in CPH INVENTORY) */
+  const editLoc = rtype(t)==='transfer' && (((st==='draft'||st==='pending') && (mine||rev)) || (st==='approved' && (rev||prep)));
+  const showFrom= true;                                                // source location column
+  const fromAll = t.items.length ? fromSummary(t.items) : '';
   const reqU=t.items.reduce((n,i)=>n+(+i.qty||0),0), appU=t.items.reduce((n,i)=>n+(+(i.qtyApproved??i.qty)||0),0), prepU=t.items.reduce((n,i)=>n+(+(i.qtyPrepared??0)||0),0);
   const ty=rtype(t); const invLink=ty==='game'?INVENTORY_APP_URL+'#loc/stockroom/subs':ty==='show'?INVENTORY_APP_URL+'#loc/cardshow/subs':'';
   let h='<div class="card"><div class="srcrow"><div><div class="eyebrow" style="margin-bottom:4px">'+RTYPES[ty].icon+' '+esc(RTYPES[ty].label)+' request</div><div class="rid mono" style="font-size:22px;font-weight:700">'+esc(t.id)+'</div></div>'+stag(st)+'<div class="spacer"></div>'+
     '<div class="pill">by <b>'+esc(t.requester)+'</b></div><div class="pill">🗓 <b>'+esc(fmtTime(t.createdAt))+'</b></div></div>'+
     (ty!=='transfer'?'<div class="srcrow" style="margin-top:12px;gap:10px"><span class="eyebrow" style="margin:0">'+(ty==='game'?'🎲 Game':'🚐 Show')+'</span>'+(editQty?'<input id="dtName" class="tinput" style="max-width:360px;font-family:var(--body)" value="'+esc(t.gameName||t.showName||'')+'">':'<b>'+esc(t.gameName||t.showName||'—')+'</b>')+(invLink?'<a class="btn sm" href="'+invLink+'" target="_blank">↗ '+(ty==='game'?'Prepare the game in CPH INVENTORY':'Open the show in CPH INVENTORY')+'</a>':'')+'</div>':'')+
-    '<div class="srcrow" style="margin-top:12px;gap:10px"><span class="eyebrow" style="margin:0">📍 Deliver to</span>'+(editQty&&ty==='transfer'?'<select id="dtTo" class="locsel sm'+(t.to?'':' missing')+'">'+locOptions(t.to||'','Choose a location…')+'</select>':'<b>'+esc(t.to||'—')+'</b>'+(ty==='game'?' <span class="sub" style="font-size:12.5px">(into the game, ready for prep)</span>':ty==='show'?' <span class="sub" style="font-size:12.5px">(a sub-location for the show)</span>':''))+
-    (showFrom?'<span class="eyebrow" style="margin:0 0 0 14px">📦 Taken from</span>'+(editPrep?'<select id="dtFrom" class="locsel sm">'+'<option value="mixed"'+(fromAll==='mixed'?' selected':'')+(fromAll==='mixed'?'':' disabled')+'>Different locations</option>'+locOptions(fromAll==='mixed'?'':fromAll,fromAll===''?'Choose for all lines…':'')+'</select>':'<b>'+esc(fromAll==='mixed'?'Different locations':(fromAll||'—'))+'</b>'):'')+'</div>'+
+    '<div class="srcrow" style="margin-top:12px;gap:10px"><span class="eyebrow" style="margin:0">📍 Deliver to</span>'+(editLoc?'<select id="dtTo" class="locsel sm'+(t.to?'':' missing')+'">'+locOptions(t.to||'','Choose a location…')+'</select>':'<b>'+esc(t.to||'—')+'</b>'+(ty==='game'?' <span class="sub" style="font-size:12.5px">(into the game, ready for prep)</span>':ty==='show'?' <span class="sub" style="font-size:12.5px">(a sub-location for the show)</span>':''))+
+    (showFrom?'<span class="eyebrow" style="margin:0 0 0 14px">📦 Taken from</span>'+(editLoc||editPrep?'<select id="dtFrom" class="locsel sm">'+'<option value="mixed"'+(fromAll==='mixed'?' selected':'')+(fromAll==='mixed'?'':' disabled')+'>Different locations</option>'+locOptions(fromAll==='mixed'?'':fromAll,fromAll===''?'Choose for all lines…':'')+'</select>':'<b>'+esc(fromAll==='mixed'?'Different locations':(fromAll||'—'))+'</b>'):'')+'</div>'+
     '<div class="statgrid" style="margin-top:14px">'+stat(t.items.length,'Lines','')+stat(reqU,'Requested','info')+(showApp?stat(appU,'Approved','warn'):'')+(showPrep?stat(prepU,'Prepared','ok'):'')+'</div>'+
     '<div class="eyebrow">Note</div>'+((st==='draft'||st==='pending')&&(mine||rev) ? '<textarea id="dtNote" class="tinput">'+esc(t.note||'')+'</textarea><button class="btn sm" id="dtNoteSave" style="margin-top:8px">Save note</button>' : '<p class="sub">'+(t.note?esc(t.note):'—')+'</p>')+
     (t.reviewedBy?'<p class="sub" style="font-size:12.5px;margin-top:8px">Reviewed by <b>'+esc(t.reviewedBy)+'</b> · '+esc(fmtTime(t.reviewedAt))+'</p>':'')+
@@ -922,7 +926,7 @@ function renderReq(){
     h+='<tr><td>'+img(i.image,i.name,'zoom')+'</td><td><b>'+esc(i.name)+'</b>'+(i.variation?'<br><span class="sub" style="font-size:12.5px">'+esc(i.variation)+'</span>':'')+(i.barcode?'<br><span class="mono" style="font-size:11px;color:var(--faint)">'+esc(i.barcode)+'</span>':'')+'</td>'+
       '<td class="num" style="color:'+(over?'var(--warn)':'var(--muted)')+'">'+(s==null?'—':fmtN(s))+(over?' ⚠':'')+(stockSplit(i.ikey)?'<br><span style="font-size:11.5px;color:var(--muted);white-space:nowrap">'+esc(stockSplit(i.ikey))+'</span>':'')+'</td>'+
       cell('qty',editQty,i.qty)+(showApp?cell('qtyApproved',editApp,i.qtyApproved??i.qty,i.qty):'')+(showPrep?cell('qtyPrepared',editPrep,i.qtyPrepared??(i.qtyApproved??i.qty),i.qtyApproved??i.qty):'')+
-      (showFrom?'<td>'+(editPrep?'<select class="locsel sm'+(i.from?'':' missing')+'" data-from="'+idx+'">'+locOptions(i.from||'','Choose…')+'</select>':esc(i.from||'—'))+'</td>':'')+
+      (showFrom?'<td>'+(editLoc||editPrep?'<select class="locsel sm'+(i.from||!editPrep?'':' missing')+'" data-from="'+idx+'">'+locOptions(i.from||'','Choose…')+'</select>':esc(i.from||'—'))+'</td>':'')+
       '<td>'+(canEditLines(t)?'<button class="rcdel" data-rm="'+idx+'">✕</button>':'')+'</td></tr>'; });
   h+='</tbody></table></div>';
   /* actions */
@@ -941,10 +945,10 @@ function renderReq(){
   body.innerHTML=h;
   /* wiring */
   const nb=$('#dtNoteSave'); if(nb) nb.onclick=()=>patch(t,{note:$('#dtNote').value.trim()},'Note updated');
-  const ts=$('#dtTo'); if(ts) ts.onchange=()=>{ const v=ts.value; if(!v) return; patch(t,{to:v},'Deliver to: '+v); };
+  const ts=$('#dtTo'); if(ts) ts.onchange=()=>{ const v=ts.value; if(!v) return; if(t.items.length&&t.items.every(x=>x.from===v)){ toast('Deliver to cannot be the place the products are taken from','warn',3500); ts.value=t.to||''; return; } patch(t,{to:v},'Deliver to: '+(t.to?t.to+' → ':'')+v); };
   const dn=$('#dtName'); if(dn) dn.addEventListener('change',()=>{ const v=dn.value.trim(); if(!v||v===(t.gameName||t.showName)) return; patch(t,ty==='game'?{gameName:v}:{showName:v},(ty==='game'?'Game: ':'Show: ')+v); });
-  const fs=$('#dtFrom'); if(fs) fs.onchange=()=>{ const v=fs.value; if(!v||v==='mixed') return; const items=t.items.map(x=>Object.assign({},x,{from:v})); patch(t,{items},'All lines taken from '+v); };
-  $$('#dtBody [data-from]').forEach(sel=>sel.onchange=()=>{ const v=sel.value; if(!v) return; const i=t.items[+sel.dataset.from]; const items=t.items.map(x=>Object.assign({},x)); items[+sel.dataset.from].from=v; patch(t,{items},i.name+': from '+v); });
+  const fs=$('#dtFrom'); if(fs) fs.onchange=()=>{ const v=fs.value; if(!v||v==='mixed') return; if(v===t.to){ toast('Taken from cannot be the same place as Deliver to','warn',3500); renderReq(); return; } const items=t.items.map(x=>Object.assign({},x,{from:v})); patch(t,{items},'All lines taken from '+v); };
+  $$('#dtBody [data-from]').forEach(sel=>sel.onchange=()=>{ const v=sel.value; if(!v) return; if(v===t.to){ toast('Taken from cannot be the same place as Deliver to','warn',3500); renderReq(); return; } const i=t.items[+sel.dataset.from]; const items=t.items.map(x=>Object.assign({},x)); items[+sel.dataset.from].from=v; patch(t,{items},i.name+': from '+v); });
   const ab=$('#dtAdd'); if(ab) ab.onclick=()=>openPicker((v,n)=>{ const items=t.items.slice(); const ex=items.find(x=>x.ikey===v.ikey); if(ex) ex.qty+=n; else items.push(lineOf(v,n)); patch(t,{items},'Added '+v.name+' ×'+n); });
   $$('#dtBody [data-rm]').forEach(b=>b.onclick=()=>{ const i=t.items[+b.dataset.rm]; if(!confirm('Remove '+i.name+' from the request?')) return; const items=t.items.filter((_,k)=>k!==+b.dataset.rm); patch(t,{items},'Removed '+i.name); });
   $$('#dtBody [data-f]').forEach(inp=>inp.addEventListener('change',()=>{ const i=t.items[+inp.dataset.i]; const f=inp.dataset.f; const n=Math.max(0,parseInt(inp.value,10)||0); const was=i[f]??(f==='qtyApproved'?i.qty:(i.qtyApproved??i.qty)); if(n===was) return;
@@ -959,6 +963,8 @@ function renderReq(){
     if(!confirm('Approve this transfer?\n'+items.length+' line(s) · '+items.reduce((n,x)=>n+x.qtyApproved,0)+' units'+(zero?'\n('+zero+' line(s) approved at 0 — they will be dropped)':''))) return;
     patch(t,{items:items.filter(x=>x.qtyApproved>0),status:'approved',reviewedBy:MY_NAME,reviewedAt:Date.now()},'Approved · '+items.reduce((n,x)=>n+x.qtyApproved,0)+' units').then(()=>notify('approved',TR[t.id]||t)); });
   on('aReady',()=>{ const items=t.items.map(x=>Object.assign({},x,{qtyPrepared:x.qtyPrepared??(x.qtyApproved??x.qty)})); const short=items.filter(x=>x.qtyPrepared<(x.qtyApproved??x.qty));
+    if(!t.to){ toast('Choose where the products should be delivered','warn',3500); return; }
+    const same=items.filter(x=>x.qtyPrepared>0&&x.from&&x.from===t.to); if(same.length){ toast(same.length+' line(s) are taken from '+t.to+' — the same place they are delivered to. Change From or Deliver to.','warn',5000); return; }
     const noFrom=items.filter(x=>x.qtyPrepared>0&&!x.from); if(noFrom.length){ toast('Choose where each line is taken from ('+noFrom.length+' missing)','warn',3500); const e=$('#dtBody [data-from]'); if(e) e.focus(); return; }
     if(!confirm('Mark as ready for transfer?\n'+items.reduce((n,x)=>n+x.qtyPrepared,0)+' units prepared'+(short.length?'\n'+short.length+' line(s) short: '+short.map(x=>x.name+' '+x.qtyPrepared+'/'+(x.qtyApproved??x.qty)).join(', '):''))) return;
     patch(t,{items,status:'ready',preparedBy:MY_NAME,preparedAt:Date.now()},'Ready for transfer · '+items.reduce((n,x)=>n+x.qtyPrepared,0)+' units'+(short.length?' ('+short.length+' short)':'')).then(async()=>{ const tt=Object.assign({},TR[t.id]||t,{items,status:'ready'}); if(!tt.preparedAt) tt.preparedAt=Date.now(); notify('ready',TR[t.id]||t); const n=await postToInventory(tt); if(n>0) toast('CPH INVENTORY updated · '+n+' line(s) moved','ok',3000); else if(n<0) toast('CPH INVENTORY was not updated — it will be retried','warn',4500); }); });
